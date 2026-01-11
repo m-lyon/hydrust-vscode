@@ -57,13 +57,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const projectRoot = await getProjectRoot();
             const settings = getExtensionSettings(serverId, projectRoot);
 
-            // Validate Python interpreter (if workspace is trusted)
-            if (vscode.workspace.isTrusted) {
-                if (settings.interpreter.length === 0) {
-                    const message = 'Python interpreter not configured. Please configure a Python interpreter.';
-                    logger.warn(message);
-                    // return;
-                }
+            // Try to get Python interpreter from Python extension first
+            const pythonPath = await getPythonInterpreter();
+
+            if (settings.interpreter.length > 0) {
+                logger.info(`Using configured Python interpreter: ${settings.interpreter[0]}`);
+            } else if (pythonPath) {
+                logger.info(`Using Python interpreter from Python extension: ${pythonPath}`);
+                settings.interpreter = [pythonPath];
+            } else {
+                logger.info('No Python interpreter found, Hydra LSP will attempt to auto-detect one.');
             }
 
             lsClient = await startServer(settings, serverId, serverName, outputChannel, traceOutputChannel, context);
@@ -113,5 +116,31 @@ export async function deactivate(): Promise<void> {
     logger.info('Deactivating Hydra LSP extension...');
     if (lsClient) {
         await stopServer(lsClient);
+    }
+}
+
+// Add this function to get the Python interpreter
+async function getPythonInterpreter(): Promise<string | undefined> {
+    try {
+        const pythonExtension = vscode.extensions.getExtension('ms-python.python');
+        if (!pythonExtension) {
+            logger.warn('Python extension not found');
+            return undefined;
+        }
+
+        if (!pythonExtension.isActive) {
+            await pythonExtension.activate();
+        }
+
+        const pythonApi = pythonExtension.exports;
+
+        // Get the active environment path
+        const activeEnvPath = pythonApi.environments.getActiveEnvironmentPath();
+        const activeEnv = await pythonApi.environments.resolveEnvironment(activeEnvPath);
+
+        return activeEnv?.executable.uri?.fsPath;
+    } catch (error) {
+        logger.error(`Failed to get Python interpreter: ${error}`);
+        return undefined;
     }
 }
