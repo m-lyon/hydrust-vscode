@@ -1,0 +1,132 @@
+{
+    "name": "hydra-lsp",
+    "displayName": "Hydra LSP",
+    "description": "Language server support for Hydra configuration files",
+    "version": "0.1.0",
+    "publisher": "m-lyon",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/m-lyon/hydra-lsp.git"
+    },
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "extensionDependencies": [
+        "ms-python.python"
+    ],
+    "activationEvents": [
+        "onLanguage:yaml",
+        "workspaceContains:**/*.yaml",
+        "workspaceContains:**/*.yml"
+    ],
+    "main": "./dist/extension.js",
+    "contributes": {
+        "configuration": {
+            "properties": {
+                "hydra-lsp.path": {
+                    "default": [],
+                    "description": "Path to the hydra-lsp executable. If empty, will attempt to auto-detect.",
+                    "scope": "resource",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "hydra-lsp.interpreter": {
+                    "default": [],
+                    "description": "Path to the Python interpreter. If empty, will use the Python extension's interpreter.",
+                    "scope": "resource",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "hydra-lsp.importStrategy": {
+                    "default": "fromEnvironment",
+                    "description": "Strategy for resolving the hydra-lsp executable.",
+                    "enum": [
+                        "fromEnvironment",
+                        "useBundled"
+                    ],
+                    "enumDescriptions": [
+                        "Use the hydra-lsp from the environment (Python scripts directory or PATH), falling back to bundled.",
+                        "Always use the bundled hydra-lsp executable."
+                    ],
+                    "scope": "window",
+                    "type": "string"
+                },
+                "hydra-lsp.logLevel": {
+                    "default": "info",
+                    "description": "The log level for the extension.",
+                    "enum": [
+                        "debug",
+                        "info",
+                        "warn",
+                        "error"
+                    ],
+                    "scope": "window",
+                    "type": "string"
+                },
+                "hydra-lsp.trace.server": {
+                    "default": "off",
+                    "description": "Traces the communication between VS Code and the language server.",
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
+                    "scope": "window",
+                    "type": "string"
+                }
+            }
+        },
+        "commands": [
+            {
+                "title": "Restart server",
+                "category": "Hydra LSP",
+                "command": "hydra-lsp.restart"
+            },
+            {
+                "title": "Show client logs",
+                "category": "Hydra LSP",
+                "command": "hydra-lsp.showLogs"
+            },
+            {
+                "title": "Show server logs",
+                "category": "Hydra LSP",
+                "command": "hydra-lsp.showServerLogs"
+            }
+        ]
+    },
+    "scripts": {
+        "compile": "webpack --mode development",
+        "watch": "webpack --mode development --watch",
+        "package": "webpack --mode production",
+        "vscode:prepublish": "npm run package",
+        "lint": "eslint src --ext ts",
+        "format": "prettier --write \"src/**/*.ts\""
+    },
+    "dependencies": {
+        "@vscode/python-extension": "^1.0.5",
+        "fs-extra": "^11.3.0",
+        "vscode-languageclient": "^9.0.1",
+        "which": "^6.0.0"
+    },
+    "devDependencies": {
+        "@types/fs-extra": "^11.0.4",
+        "@types/node": "^24.0.0",
+        "@types/vscode": "1.75.0",
+        "@types/which": "^3.0.4",
+        "@vscode/vsce": "^3.4.2",
+        "eslint": "^9.28.0",
+        "prettier": "^3.5.3",
+        "ts-loader": "^9.5.2",
+        "typescript": "^5.8.3",
+        "webpack": "^5.99.9",
+        "webpack-cli": "^6.0.1"
+    }
+}
