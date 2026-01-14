@@ -1,7 +1,7 @@
 {
-    "name": "hydra-lsp",
+    "name": "hydrust",
     "displayName": "Hydra LSP",
-    "description": "Language server support for Hydra configuration files",
+    "description": "A Language server for Hydra configuration files built in rust.",
     "version": "0.1.0",
     "publisher": "m-lyon",
     "license": "MIT",
@@ -29,7 +29,7 @@
             "properties": {
                 "hydra-lsp.path": {
                     "default": [],
-                    "description": "Path to the hydra-lsp executable. If empty, will attempt to auto-detect.",
+                    "description": "Path to the hydra-lsp executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
                     "scope": "resource",
                     "items": {
                         "type": "string"
@@ -53,9 +53,15 @@
                         "useBundled"
                     ],
                     "enumDescriptions": [
-                        "Use the hydra-lsp from the environment (Python scripts directory or PATH), falling back to bundled.",
+                        "Use the hydra-lsp from the environment (available on PATH), whilst falling back to bundled executable if not found.",
                         "Always use the bundled hydra-lsp executable."
                     ],
+                    "scope": "window",
+                    "type": "string"
+                },
+                "hydra-lsp.serverVersion": {
+                    "default": "latest",
+                    "description": "The version of the Hydra LSP server to download. Use 'latest' for the most recent release, or specify a version like 'v0.1.0'. Only applicable if using the bundled executable.",
                     "scope": "window",
                     "type": "string"
                 },

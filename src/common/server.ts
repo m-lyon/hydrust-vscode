@@ -4,6 +4,7 @@ import which from 'which';
 import { logger } from './logger';
 import { ExtensionSettings } from './settings';
 import { getBundledExecutablePath } from './constants';
+import { ensureServer } from './download';
 import { fsapi } from './vscodeapi';
 import {
     LanguageClient,
@@ -16,15 +17,8 @@ import {
  * Find the path to the hydra-lsp binary
  */
 async function findBinaryPath(settings: ExtensionSettings, context: vscode.ExtensionContext): Promise<string> {
-    const bundledExecutable = getBundledExecutablePath(context);
 
-    // 1. Untrusted workspaces always use bundled
-    if (!vscode.workspace.isTrusted) {
-        logger.info('Workspace is not trusted, using bundled executable');
-        return bundledExecutable;
-    }
-
-    // 2. User-specified path takes priority
+    // 1. User-specified path takes priority
     if (settings.path.length > 0) {
         for (const p of settings.path) {
             if (await fsapi.pathExists(p)) {
@@ -35,26 +29,22 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
         logger.warn('No valid path found in settings.path');
     }
 
-    // 3. Use bundled if explicitly requested
-    if (settings.importStrategy === 'useBundled') {
-        logger.info(`Using bundled executable: ${bundledExecutable}`);
-        return bundledExecutable;
-    }
-
-    // 5. Check global PATH
-    try {
-        const environmentPath = await which('hydra-lsp', { nothrow: true });
-        if (environmentPath) {
-            logger.info(`Using environment executable: ${environmentPath}`);
-            return environmentPath;
+    // 2. Use environment if explicitly requested
+    if (settings.importStrategy === 'fromEnvironment') {
+        try {
+            const environmentPath = await which('hydra-lsp', { nothrow: true });
+            if (environmentPath) {
+                logger.info(`Using environment executable: ${environmentPath}`);
+                return environmentPath;
+            }
+        } catch (err) {
+            logger.debug(`Error checking PATH: ${err}`);
         }
-    } catch (err) {
-        logger.debug(`Error checking PATH: ${err}`);
     }
 
-    // 6. Fallback to bundled
+    // 3. Fallback to bundled
     logger.info('Falling back to bundled executable');
-    return bundledExecutable;
+    return await ensureServer(settings.serverVersion, context);
 }
 
 /**

@@ -7,6 +7,7 @@ export interface ExtensionSettings {
     path: string[];
     interpreter: string[];
     importStrategy: 'fromEnvironment' | 'useBundled';
+    serverVersion: string;
     logLevel: 'debug' | 'info' | 'warn' | 'error';
     traceServer: 'off' | 'messages' | 'verbose';
 }
@@ -21,6 +22,7 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
         path: config.get<string[]>('path', []),
         interpreter: config.get<string[]>('interpreter', []),
         importStrategy: config.get<'fromEnvironment' | 'useBundled'>('importStrategy', 'fromEnvironment'),
+        serverVersion: config.get<string>('serverVersion', 'latest'),
         logLevel: config.get<'debug' | 'info' | 'warn' | 'error'>('logLevel', 'info'),
         traceServer: config.get<'off' | 'messages' | 'verbose'>('trace.server', 'off'),
     };
@@ -30,6 +32,6 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
  * Check if configuration changed for our extension
  */
 export function checkIfConfigurationChanged(e: vscode.ConfigurationChangeEvent, serverId: string): boolean {
-    const sections = ['path', 'interpreter', 'importStrategy', 'logLevel', 'trace.server'];
+    const sections = ['path', 'interpreter', 'importStrategy', 'serverVersion', 'logLevel', 'trace.server'];
     return sections.some((section) => e.affectsConfiguration(`${serverId}.${section}`));
 }
