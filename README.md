@@ -4,8 +4,9 @@ Hydra LSP VSCode Extension
 
 ## Installation
 
-1. Build the extension: `npx vsce package`
-2. On VSCode Command Palette select "Extensions: Install from VSIX..."
+1. Install the project: `npm install`
+2. Build the extension: `npx vsce package`
+3. On VSCode Command Palette select "Extensions: Install from VSIX..."
 
 ## Features
 
