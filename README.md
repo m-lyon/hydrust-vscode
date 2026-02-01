@@ -1,6 +1,6 @@
-# hydra-lsp-vscode
+# hydrust-vscode
 
-Hydra LSP VSCode Extension
+Hydrust VSCode Extension
 
 ## Installation
 
