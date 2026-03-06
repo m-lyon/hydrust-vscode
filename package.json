@@ -27,16 +27,16 @@
     "contributes": {
         "configuration": {
             "properties": {
-                "hydra-lsp.path": {
+                "hydrust.serverPath": {
                     "default": [],
-                    "description": "Path to the hydra-lsp executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
+                    "description": "Path to the hydrust-server executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
                     "scope": "resource",
                     "items": {
                         "type": "string"
                     },
                     "type": "array"
                 },
-                "hydra-lsp.interpreter": {
+                "hydrust.pythonInterpreterPath": {
                     "default": [],
                     "description": "Path to the Python interpreter. If empty, will use the Python extension's interpreter.",
                     "scope": "resource",
@@ -45,27 +45,27 @@
                     },
                     "type": "array"
                 },
-                "hydra-lsp.importStrategy": {
+                "hydrust.importStrategy": {
                     "default": "fromEnvironment",
-                    "description": "Strategy for resolving the hydra-lsp executable.",
+                    "description": "Strategy for resolving the hydrust-server executable.",
                     "enum": [
                         "fromEnvironment",
                         "useBundled"
                     ],
                     "enumDescriptions": [
-                        "Use the hydra-lsp from the environment (available on PATH), whilst falling back to bundled executable if not found.",
-                        "Always use the bundled hydra-lsp executable."
+                        "Use the hydrust-server from the environment (available on PATH), whilst falling back to bundled executable if not found.",
+                        "Always use the bundled hydrust-server executable."
                     ],
                     "scope": "window",
                     "type": "string"
                 },
-                "hydra-lsp.serverVersion": {
+                "hydrust.serverVersion": {
                     "default": "latest",
-                    "description": "The version of the Hydra LSP server to download. Use 'latest' for the most recent release, or specify a version like 'v0.1.0'. Only applicable if using the bundled executable.",
+                    "description": "The version of the Hydrust server to download. Use 'latest' for the most recent release, or specify a version like 'v0.1.0'. Only applicable if using the bundled executable.",
                     "scope": "window",
                     "type": "string"
                 },
-                "hydra-lsp.logLevel": {
+                "hydrust.logLevel": {
                     "default": "info",
                     "description": "The log level for the extension.",
                     "enum": [
@@ -77,7 +77,7 @@
                     "scope": "window",
                     "type": "string"
                 },
-                "hydra-lsp.trace.server": {
+                "hydrust.traceServer": {
                     "default": "off",
                     "description": "Traces the communication between VS Code and the language server.",
                     "enum": [
@@ -88,7 +88,7 @@
                     "scope": "window",
                     "type": "string"
                 },
-                "hydra-lsp.disabledRules": {
+                "hydrust.disabledRules": {
                     "default": [],
                     "description": "List of diagnostic rules to disable. Available rules: missing-argument, unknown-argument, unresolved-reference, unresolved-import, invalid-target.",
                     "scope": "resource",
@@ -104,37 +104,37 @@
                     },
                     "type": "array"
                 },
-                "hydra-lsp.enableHover": {
+                "hydrust.enableHover": {
                     "default": true,
                     "description": "Enable hover information for `_target_` values.",
                     "scope": "resource",
                     "type": "boolean"
                 },
-                "hydra-lsp.enableCompletion": {
+                "hydrust.enableCompletion": {
                     "default": true,
                     "description": "Enable auto-completion for `_target_` values and parameters.",
                     "scope": "resource",
                     "type": "boolean"
                 },
-                "hydra-lsp.enableSignatureHelp": {
+                "hydrust.enableSignatureHelp": {
                     "default": true,
                     "description": "Enable signature help for `_target_` values.",
                     "scope": "resource",
                     "type": "boolean"
                 },
-                "hydra-lsp.enableGotoDefinition": {
+                "hydrust.enableGotoDefinition": {
                     "default": true,
                     "description": "Enable go-to-definition for `_target_` values.",
                     "scope": "resource",
                     "type": "boolean"
                 },
-                "hydra-lsp.enableSemanticTokens": {
+                "hydrust.enableSemanticTokens": {
                     "default": true,
                     "description": "Enable semantic token highlighting.",
                     "scope": "resource",
                     "type": "boolean"
                 },
-                "hydra-lsp.enableDiagnostics": {
+                "hydrust.enableDiagnostics": {
                     "default": true,
                     "description": "Enable diagnostics (error/warning reporting).",
                     "scope": "resource",
@@ -145,18 +145,18 @@
         "commands": [
             {
                 "title": "Restart server",
-                "category": "Hydra LSP",
-                "command": "hydra-lsp.restart"
+                "category": "Hydrust",
+                "command": "hydrust.restart"
             },
             {
                 "title": "Show client logs",
-                "category": "Hydra LSP",
-                "command": "hydra-lsp.showLogs"
+                "category": "Hydrust",
+                "command": "hydrust.showLogs"
             },
             {
                 "title": "Show server logs",
-                "category": "Hydra LSP",
-                "command": "hydra-lsp.showServerLogs"
+                "category": "Hydrust",
+                "command": "hydrust.showServerLogs"
             }
         ]
     },

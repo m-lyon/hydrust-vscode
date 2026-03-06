@@ -2,6 +2,7 @@
 import * as vscode from 'vscode';
 import which from 'which';
 import { logger } from './logger';
+import { BINARY_NAME } from './constants';
 import { ExtensionSettings } from './settings';
 import { ensureServer } from './download';
 import { fsapi } from './vscodeapi';
@@ -13,7 +14,7 @@ import {
 } from 'vscode-languageclient/node';
 
 /**
- * Find the path to the hydra-lsp binary
+ * Find the path to the hydrust server binary
  */
 async function findBinaryPath(settings: ExtensionSettings, context: vscode.ExtensionContext): Promise<string> {
 
@@ -31,7 +32,7 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
     // 2. Use environment if explicitly requested
     if (settings.importStrategy === 'fromEnvironment') {
         try {
-            const environmentPath = await which('hydra-lsp', { nothrow: true });
+            const environmentPath = await which(BINARY_NAME, { nothrow: true });
             if (environmentPath) {
                 logger.info(`Using environment executable: ${environmentPath}`);
                 return environmentPath;
@@ -57,7 +58,7 @@ export async function startServer(
     traceOutputChannel: vscode.OutputChannel,
     context: vscode.ExtensionContext
 ): Promise<LanguageClient> {
-    logger.info('Starting Hydra LSP server...');
+    logger.info('Starting Hydrust Server...');
 
     // Find the binary
     const serverPath = await findBinaryPath(settings, context);
@@ -65,7 +66,7 @@ export async function startServer(
 
     // Check if binary exists
     if (!(await fsapi.pathExists(serverPath))) {
-        const message = `Hydra LSP binary not found at: ${serverPath}`;
+        const message = `Hydrust Server binary not found at: ${serverPath}`;
         logger.error(message);
         throw new Error(message);
     }
@@ -112,7 +113,7 @@ export async function startServer(
 
     try {
         await client.start();
-        logger.info('Hydra LSP server started successfully');
+        logger.info('Hydrust Server started successfully');
     } catch (err) {
         logger.error(`Failed to start server: ${err}`);
         throw err;
@@ -125,10 +126,10 @@ export async function startServer(
  * Stop the language server
  */
 export async function stopServer(client: LanguageClient): Promise<void> {
-    logger.info('Stopping Hydra LSP server...');
+    logger.info('Stopping Hydrust Server...');
     try {
         await client.stop();
-        logger.info('Hydra LSP server stopped');
+        logger.info('Hydrust Server stopped');
     } catch (err) {
         logger.error(`Error stopping server: ${err}`);
     }

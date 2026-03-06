@@ -2,6 +2,12 @@ import * as path from 'path';
 import * as os from 'os';
 
 /**
+ * The base name of the server binary (without platform suffix or extension).
+ * Change this single value to rename the binary everywhere.
+ */
+export const BINARY_NAME = 'hydra-lsp';
+
+/**
  * Platform information for binary downloads
  */
 export interface PlatformInfo {
@@ -27,7 +33,7 @@ export function getPlatformInfo(): PlatformInfo {
     if (platform === 'win32') {
         platformId = 'x86_64-pc-windows-msvc';
         archiveExt = 'zip';
-        executableName = 'hydra-lsp.exe';
+        executableName = `${BINARY_NAME}.exe`;
     } else if (platform === 'darwin') {
         if (arch === 'arm64') {
             platformId = 'aarch64-apple-darwin';
@@ -35,7 +41,7 @@ export function getPlatformInfo(): PlatformInfo {
             platformId = 'x86_64-apple-darwin';
         }
         archiveExt = 'tar.xz';
-        executableName = 'hydra-lsp';
+        executableName = BINARY_NAME;
     } else if (platform === 'linux') {
         if (arch === 'arm64') {
             platformId = 'aarch64-unknown-linux-gnu';
@@ -44,7 +50,7 @@ export function getPlatformInfo(): PlatformInfo {
             platformId = 'x86_64-unknown-linux-gnu';
         }
         archiveExt = 'tar.xz';
-        executableName = 'hydra-lsp';
+        executableName = BINARY_NAME;
     } else {
         throw new Error(`Unsupported platform: ${platform} ${arch}`);
     }
@@ -60,8 +66,7 @@ export function getPlatformInfo(): PlatformInfo {
  * Get the download URL for a specific version and platform
  */
 export function getDownloadUrl(version: string, platformInfo: PlatformInfo): string {
-    const { platform, archiveExt } = platformInfo;
-    const filename = `hydra-lsp-${platform}.${archiveExt}`;
+    const filename = `${getArchiveDirectoryName(platformInfo)}.${platformInfo.archiveExt}`;
     return `https://github.com/m-lyon/hydra-lsp/releases/download/${version}/${filename}`;
 }
 
@@ -77,29 +82,17 @@ export function getChecksumUrl(version: string, platformInfo: PlatformInfo): str
  * Get the archive directory name (the nested directory created when extracting)
  */
 export function getArchiveDirectoryName(platformInfo: PlatformInfo): string {
-    return `hydra-lsp-${platformInfo.platform}`;
+    return `${BINARY_NAME}-${platformInfo.platform}`;
 }
 
 /**
- * Get the platform-specific executable name
+ * Get the expected executable path for a specific version
  */
-export function getExecutableName(): string {
-    return process.platform === 'win32' ? 'hydra-lsp.exe' : 'hydra-lsp';
-}
-
-/**
- * Get the bundled executable path
- */
-export function getBundledExecutablePath(context: any): string {
-    const executableName = getExecutableName();
-    return path.join(context.extensionPath, 'bundled', 'libs', 'bin', executableName);
-}
-
-/**
- * Get the bundled directory path
- */
-export function getBundledDir(context: any): string {
-    return path.join(context.extensionPath, 'bundled', 'libs', 'bin');
+export function getExecutablePath(context: any, version: string): string {
+    const platformInfo = getPlatformInfo();
+    const versionedDir = getVersionedDir(context, version);
+    const archiveDirName = getArchiveDirectoryName(platformInfo);
+    return path.join(versionedDir, archiveDirName, platformInfo.executableName);
 }
 
 /**

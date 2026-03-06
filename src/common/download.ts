@@ -6,7 +6,8 @@ import * as crypto from 'crypto';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import { logger } from './logger';
-import { getPlatformInfo, getDownloadUrl, getChecksumUrl, getVersionedDir, getArchiveDirectoryName, isWindows } from './constants';
+import { BINARY_NAME, getPlatformInfo, getDownloadUrl, getChecksumUrl } from './constants';
+import { getVersionedDir, getExecutablePath, isWindows } from './constants';
 import { fsapi } from './vscodeapi';
 
 const execAsync = promisify(exec);
@@ -148,13 +149,20 @@ async function extractArchive(archivePath: string, destDir: string): Promise<voi
 }
 
 /**
- * Get the latest release version from GitHub
+ * Get the latest release version from GitHub that contains an asset
+ * matching the expected binary name for the current platform.
+ *
+ * This ensures the extension only resolves to a release that actually
+ * provides the binary it expects to download.
  */
 async function getLatestVersion(): Promise<string> {
+    const platformInfo = getPlatformInfo();
+    const expectedAssetName = `${BINARY_NAME}-${platformInfo.platform}.${platformInfo.archiveExt}`;
+
     return new Promise((resolve, reject) => {
         const options = {
             hostname: 'api.github.com',
-            path: '/repos/m-lyon/hydra-lsp/releases/latest',
+            path: '/repos/m-lyon/hydra-lsp/releases',
             method: 'GET',
             headers: {
                 'User-Agent': 'hydra-lsp-vscode',
@@ -170,12 +178,24 @@ async function getLatestVersion(): Promise<string> {
 
             response.on('end', () => {
                 try {
-                    const release = JSON.parse(data);
-                    if (release.tag_name) {
-                        resolve(release.tag_name);
-                    } else {
-                        reject(new Error('No tag_name in release data'));
+                    const releases = JSON.parse(data);
+                    if (!Array.isArray(releases)) {
+                        reject(new Error('Unexpected response from GitHub releases API'));
+                        return;
                     }
+                    for (const release of releases) {
+                        if (!release.tag_name || !Array.isArray(release.assets)) {
+                            continue;
+                        }
+                        const hasMatchingAsset = release.assets.some(
+                            (asset: { name: string }) => asset.name === expectedAssetName
+                        );
+                        if (hasMatchingAsset) {
+                            resolve(release.tag_name);
+                            return;
+                        }
+                    }
+                    reject(new Error(`No release found with asset matching '${expectedAssetName}'`));
                 } catch (err) {
                     reject(err);
                 }
@@ -185,7 +205,7 @@ async function getLatestVersion(): Promise<string> {
 }
 
 /**
- * Download and install the Hydra LSP server binary
+ * Download and install the Hydrust Server binary
  */
 export async function downloadServer(
     version: string,
@@ -223,11 +243,10 @@ export async function downloadServer(
 
         const archiveFilename = path.basename(downloadUrl);
         const archivePath = path.join(versionedDir, archiveFilename);
-        const archiveDirName = getArchiveDirectoryName(platformInfo);
-        const executablePath = path.join(versionedDir, archiveDirName, platformInfo.executableName);
+        const executablePath = getExecutablePath(context, resolvedVersion);
 
         // Download archive
-        progress(`Downloading Hydra LSP ${resolvedVersion}...`);
+        progress(`Downloading Hydrust Server ${resolvedVersion}...`);
         await downloadFile(downloadUrl, archivePath);
         logger.info(`Downloaded to: ${archivePath}`);
 
@@ -258,7 +277,7 @@ export async function downloadServer(
             logger.info('Made executable');
         }
 
-        progress(`Hydra LSP ${resolvedVersion} installed successfully`);
+        progress(`Hydrust Server ${resolvedVersion} installed successfully`);
         return executablePath;
     } catch (err) {
         logger.error(`Failed to download server: ${err}`);
@@ -291,10 +310,7 @@ export async function needsDownload(
         resolvedVersion = `v${resolvedVersion}`;
     }
 
-    const platformInfo = getPlatformInfo();
-    const versionedDir = getVersionedDir(context, resolvedVersion);
-    const archiveDirName = getArchiveDirectoryName(platformInfo);
-    const executablePath = path.join(versionedDir, archiveDirName, platformInfo.executableName);
+    const executablePath = getExecutablePath(context, resolvedVersion);
 
     // Check if executable exists in the versioned directory
     const exists = await fsapi.pathExists(executablePath);
@@ -315,13 +331,13 @@ export async function ensureServer(
     context: vscode.ExtensionContext
 ): Promise<string> {
     if (await needsDownload(version, context)) {
-        logger.info(`Downloading Hydra LSP server version: ${version}`);
+        logger.info(`Downloading Hydrust Server version: ${version}`);
 
         // Show progress to user
         return await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
-                title: 'Hydra LSP',
+                title: 'Hydrust Server',
                 cancellable: false,
             },
             async (progress) => {
@@ -343,10 +359,5 @@ export async function ensureServer(
         resolvedVersion = `v${resolvedVersion}`;
     }
 
-    const platformInfo = getPlatformInfo();
-    const versionedDir = getVersionedDir(context, resolvedVersion);
-    const archiveDirName = getArchiveDirectoryName(platformInfo);
-    const executablePath = path.join(versionedDir, archiveDirName, platformInfo.executableName);
-
-    return executablePath;
+    return getExecutablePath(context, resolvedVersion);
 }

@@ -20,8 +20,8 @@ interface ServerInfo {
  */
 function loadServerDefaults(): ServerInfo {
     return {
-        name: 'Hydra LSP',
-        module: 'hydra-lsp',
+        name: 'Hydrust',
+        module: 'hydrust-server',
     };
 }
 
@@ -39,8 +39,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.debug(`Full Server Info: ${JSON.stringify(serverInfo)}`);
 
     // Create output channels for the server and trace logs
-    const outputChannel = vscode.window.createOutputChannel(`${serverName} Language Server`);
-    const traceOutputChannel = new LazyOutputChannel(`${serverName} Language Server Trace`);
+    const outputChannel = vscode.window.createOutputChannel(`${serverName} Server`);
+    const traceOutputChannel = new LazyOutputChannel(`${serverName} Server Trace`);
 
     // Make sure that these channels are disposed when the extension is deactivated.
     context.subscriptions.push(outputChannel);
@@ -66,7 +66,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 logger.info(`Using Python interpreter from Python extension: ${pythonPath}`);
                 settings.interpreter = [pythonPath];
             } else {
-                logger.info('No Python interpreter found, Hydra LSP will attempt to auto-detect one.');
+                logger.info('No Python interpreter found, Hydrust will attempt to auto-detect one.');
             }
 
             lsClient = await startServer(settings, serverId, serverName, outputChannel, traceOutputChannel, context);
@@ -77,7 +77,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             });
 
         } catch (err) {
-            const message = `Failed to start Hydra LSP server: ${err}`;
+            const message = `Failed to start Hydrust Server: ${err}`;
             logger.error(message);
             vscode.window.showErrorMessage(message);
         }
@@ -113,7 +113,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  * Extension deactivation
  */
 export async function deactivate(): Promise<void> {
-    logger.info('Deactivating Hydra LSP extension...');
+    logger.info('Deactivating Hydrust extension...');
     if (lsClient) {
         await stopServer(lsClient);
     }
