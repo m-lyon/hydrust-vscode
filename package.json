@@ -28,22 +28,16 @@
         "configuration": {
             "properties": {
                 "hydrust.serverPath": {
-                    "default": [],
+                    "default": "",
                     "description": "Path to the hydrust-server executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
                     "scope": "resource",
-                    "items": {
-                        "type": "string"
-                    },
-                    "type": "array"
+                    "type": "string"
                 },
                 "hydrust.pythonInterpreterPath": {
-                    "default": [],
+                    "default": "",
                     "description": "Path to the Python interpreter. If empty, will use the Python extension's interpreter.",
                     "scope": "resource",
-                    "items": {
-                        "type": "string"
-                    },
-                    "type": "array"
+                    "type": "string"
                 },
                 "hydrust.importStrategy": {
                     "default": "fromEnvironment",

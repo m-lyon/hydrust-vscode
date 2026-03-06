@@ -21,7 +21,7 @@ interface ServerInfo {
 function loadServerDefaults(): ServerInfo {
     return {
         name: 'Hydrust',
-        module: 'hydrust-server',
+        module: 'hydrust',
     };
 }
 
@@ -60,11 +60,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             // Try to get Python interpreter from Python extension first
             const pythonPath = await getPythonInterpreter();
 
-            if (settings.interpreter.length > 0) {
-                logger.info(`Using configured Python interpreter: ${settings.interpreter[0]}`);
+            if (settings.interpreter) {
+                logger.info(`Using configured Python interpreter: ${settings.interpreter}`);
             } else if (pythonPath) {
                 logger.info(`Using Python interpreter from Python extension: ${pythonPath}`);
-                settings.interpreter = [pythonPath];
+                settings.interpreter = pythonPath;
             } else {
                 logger.info('No Python interpreter found, Hydrust will attempt to auto-detect one.');
             }

@@ -20,11 +20,9 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
 
     // 1. User-specified path takes priority
     if (settings.path.length > 0) {
-        for (const p of settings.path) {
-            if (await fsapi.pathExists(p)) {
-                logger.info(`Using 'path' setting: ${p}`);
-                return p;
-            }
+        if (await fsapi.pathExists(settings.path)) {
+            logger.info(`Using 'path' setting: ${settings.path}`);
+            return settings.path;
         }
         logger.warn('No valid path found in settings.path');
     }
@@ -95,7 +93,7 @@ export async function startServer(
         },
         initializationOptions: {
             settings: {
-                pythonInterpreter: settings.interpreter.length > 0 ? settings.interpreter[0] : undefined,
+                pythonInterpreter: settings.interpreter ? settings.interpreter : undefined,
                 logLevel: settings.logLevel,
                 disabledRules: settings.disabledRules,
                 enableHover: settings.enableHover,
@@ -135,18 +133,3 @@ export async function stopServer(client: LanguageClient): Promise<void> {
     }
 }
 
-/**
- * Restart the language server
- */
-export async function restartServer(
-    client: LanguageClient,
-    settings: ExtensionSettings,
-    serverId: string,
-    serverName: string,
-    outputChannel: vscode.OutputChannel,
-    traceOutputChannel: vscode.OutputChannel,
-    context: vscode.ExtensionContext
-): Promise<LanguageClient> {
-    await stopServer(client);
-    return await startServer(settings, serverId, serverName, outputChannel, traceOutputChannel, context);
-}
