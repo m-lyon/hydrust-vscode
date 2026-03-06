@@ -3,7 +3,6 @@ import * as vscode from 'vscode';
 import which from 'which';
 import { logger } from './logger';
 import { ExtensionSettings } from './settings';
-import { getBundledExecutablePath } from './constants';
 import { ensureServer } from './download';
 import { fsapi } from './vscodeapi';
 import {
@@ -97,6 +96,13 @@ export async function startServer(
             settings: {
                 pythonInterpreter: settings.interpreter.length > 0 ? settings.interpreter[0] : undefined,
                 logLevel: settings.logLevel,
+                disabledRules: settings.disabledRules,
+                enableHover: settings.enableHover,
+                enableCompletion: settings.enableCompletion,
+                enableSignatureHelp: settings.enableSignatureHelp,
+                enableGotoDefinition: settings.enableGotoDefinition,
+                enableSemanticTokens: settings.enableSemanticTokens,
+                enableDiagnostics: settings.enableDiagnostics,
             },
         },
     };

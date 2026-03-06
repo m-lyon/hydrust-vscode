@@ -112,16 +112,6 @@ export function getVersionedDir(context: any, version: string): string {
 }
 
 /**
- * Get the versioned executable path for a specific version
- */
-export function getVersionedExecutablePath(context: any, version: string): string {
-    const platformInfo = getPlatformInfo();
-    const executableName = getExecutableName();
-    const archiveDirName = getArchiveDirectoryName(platformInfo);
-    return path.join(getVersionedDir(context, version), archiveDirName, executableName);
-}
-
-/**
  * Check if the current platform is Windows
  */
 export function isWindows(): boolean {

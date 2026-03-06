@@ -1,13 +1,13 @@
 {
     "name": "hydrust",
-    "displayName": "Hydra LSP",
+    "displayName": "Hydra Language Server",
     "description": "A Language server for Hydra configuration files built in rust.",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "publisher": "m-lyon",
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "https://github.com/m-lyon/hydra-lsp.git"
+        "url": "https://github.com/m-lyon/hydrust-vscode.git"
     },
     "engines": {
         "vscode": "^1.75.0"
@@ -87,6 +87,58 @@
                     ],
                     "scope": "window",
                     "type": "string"
+                },
+                "hydra-lsp.disabledRules": {
+                    "default": [],
+                    "description": "List of diagnostic rules to disable. Available rules: missing-argument, unknown-argument, unresolved-reference, unresolved-import, invalid-target.",
+                    "scope": "resource",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "missing-argument",
+                            "unknown-argument",
+                            "unresolved-reference",
+                            "unresolved-import",
+                            "invalid-target"
+                        ]
+                    },
+                    "type": "array"
+                },
+                "hydra-lsp.enableHover": {
+                    "default": true,
+                    "description": "Enable hover information for `_target_` values.",
+                    "scope": "resource",
+                    "type": "boolean"
+                },
+                "hydra-lsp.enableCompletion": {
+                    "default": true,
+                    "description": "Enable auto-completion for `_target_` values and parameters.",
+                    "scope": "resource",
+                    "type": "boolean"
+                },
+                "hydra-lsp.enableSignatureHelp": {
+                    "default": true,
+                    "description": "Enable signature help for `_target_` values.",
+                    "scope": "resource",
+                    "type": "boolean"
+                },
+                "hydra-lsp.enableGotoDefinition": {
+                    "default": true,
+                    "description": "Enable go-to-definition for `_target_` values.",
+                    "scope": "resource",
+                    "type": "boolean"
+                },
+                "hydra-lsp.enableSemanticTokens": {
+                    "default": true,
+                    "description": "Enable semantic token highlighting.",
+                    "scope": "resource",
+                    "type": "boolean"
+                },
+                "hydra-lsp.enableDiagnostics": {
+                    "default": true,
+                    "description": "Enable diagnostics (error/warning reporting).",
+                    "scope": "resource",
+                    "type": "boolean"
                 }
             }
         },

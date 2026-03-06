@@ -247,15 +247,15 @@ export async function downloadServer(
         // Clean up archive
         await fs.unlink(archivePath);
 
+        // Verify executable exists
+        if (!(await fsapi.pathExists(executablePath))) {
+            throw new Error(`Executable not found after extraction: ${executablePath}`);
+        }
+
         // Make executable on Unix systems
         if (!isWindows()) {
             await execAsync(`chmod +x "${executablePath}"`);
             logger.info('Made executable');
-        }
-
-        // Verify executable exists
-        if (!(await fsapi.pathExists(executablePath))) {
-            throw new Error(`Executable not found after extraction: ${executablePath}`);
         }
 
         progress(`Hydra LSP ${resolvedVersion} installed successfully`);
