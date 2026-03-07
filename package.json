@@ -100,25 +100,25 @@
                 },
                 "hydrust.enableHover": {
                     "default": true,
-                    "description": "Enable hover information for target values.",
+                    "description": "Enable hover information for hydra targets.",
                     "scope": "resource",
                     "type": "boolean"
                 },
                 "hydrust.enableCompletion": {
                     "default": true,
-                    "description": "Enable auto-completion for target values and parameters.",
+                    "description": "Enable auto-completion for hydra targets.",
                     "scope": "resource",
                     "type": "boolean"
                 },
                 "hydrust.enableSignatureHelp": {
                     "default": true,
-                    "description": "Enable signature help for target values.",
+                    "description": "Enable signature help for hydra targets.",
                     "scope": "resource",
                     "type": "boolean"
                 },
                 "hydrust.enableGotoDefinition": {
                     "default": true,
-                    "description": "Enable go-to-definition for target values.",
+                    "description": "Enable go-to-definition for hydra targets.",
                     "scope": "resource",
                     "type": "boolean"
                 },
