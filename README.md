@@ -1,35 +1,66 @@
-# hydrust-vscode
+# Hydrust
 
-Hydrust VSCode Extension
+A VS Code extension providing intelligent language features for [Hydra](https://hydra.cc/) configuration files. Powered by a fast Rust-based language server.
 
-## Installation
-
-1. Install the project: `npm install`
-2. Build the extension: `npx vsce package`
-3. On VSCode Command Palette select "Extensions: Install from VSIX..."
+If you use Hydra's `_target_` pattern to instantiate Python objects from YAML config files, Hydrust gives you hover documentation, go-to-definition, diagnostics, signature help, and semantic highlighting.
 
 ## Features
 
-### Currently Implemented
+Hydrust provides several intelligent features, each of which can be individually enabled or disabled in settings.
 
-- ✅ **YAML Parsing**: Extracts `_target_` references and their parameters
-- ✅ **Hover Support**: Shows rich information when hovering over `_target_` values:
-  - Function signatures with parameter details
-  - Class information and docstrings
-  - Type annotations
-- ✅ **Go to Definition**: Jump from YAML `_target_` to Python source file
-- ✅ **Diagnostics**: Parameter validation including:
-  - Unknown parameters (unless `**kwargs` present)
-  - Missing required parameters
-  - Basic `_target_` format validation
-- ✅ **Semantic Tokens**: Rich syntax highlighting for Hydra configurations:
-  - Module path components (namespace tokens)
-  - Class and function names
-  - Parameter keys (parameter tokens)
-  - Values (string, number, and property tokens)
-- ✅ **Signature Help**: Shows parameter information while typing function arguments
+### Hover Information
 
-### Planned Features
+Hover over a `_target_` value to see the resolved Python class or function signature, including parameter types, defaults, and docstrings.
 
-- 🔄 **Type Validation**: Validate YAML values against Python type annotations
-- 🔄 **Smart Autocomplete**: Suggest Python classes/functions and parameters
+### Go to Definition
+
+Jump directly from a `_target_` string in a Hydra `yaml` file to the corresponding Python source definition.
+
+### Diagnostics
+
+Real-time validation of your Hydra configs:
+
+- Missing required parameters
+- Unknown parameters
+- Unresolved references and imports
+
+Individual diagnostic rules can be disabled globally via the `hydrust.disabledRules` setting, or suppressed directly in your `yaml` files using `# hydrust: ignore[...]` comments.
+
+**File-wide suppression** — place ignore comments in the file header (before any YAML content) to suppress rules for the entire file:
+
+```yaml
+# hydrust: ignore[missing-argument, unknown-argument]
+
+db:
+  _target_: my_module.DB
+  host: localhost
+```
+
+**Inline suppression** — append an ignore comment to a specific line:
+
+```yaml
+db:
+  _target_: my_module.DB
+  host: localhost  # hydrust: ignore[unknown-argument]
+```
+
+Available rules: `missing-argument`, `unknown-argument`, `unresolved-reference`, `unresolved-import`, `invalid-target`.
+
+### Signature Help
+
+Displays parameter information as you type, showing parameter names, types, and default values.
+
+### Semantic Highlighting
+
+Provides rich syntax highlighting for Hydra `yaml` files, colouring module paths, class & function names, parameter keys, and values with distinct token types.
+
+## Python Environment Detection
+
+Hydrust automatically detects your Python environment using the following priority:
+
+1. `hydrust.pythonInterpreterPath` setting (if configured)
+2. Python extension's active interpreter
+3. `VIRTUAL_ENV` environment variable
+4. `CONDA_PREFIX` environment variable
+5. `.venv` directory in workspace root
+6. System Python

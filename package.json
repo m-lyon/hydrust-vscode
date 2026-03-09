@@ -1,7 +1,7 @@
 {
     "name": "hydrust",
-    "displayName": "Hydra Language Server",
-    "description": "A Language server for Hydra configuration files built in rust.",
+    "displayName": "Hydrust",
+    "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
     "version": "0.1.1",
     "publisher": "m-lyon",
     "license": "MIT",
@@ -13,7 +13,11 @@
         "vscode": "^1.75.0"
     },
     "categories": [
-        "Programming Languages"
+        "Programming Languages",
+        "Machine Learning",
+        "AI",
+        "Data Science",
+        "Linters"
     ],
     "extensionDependencies": [
         "ms-python.python"
