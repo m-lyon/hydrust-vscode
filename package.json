@@ -1,194 +1,212 @@
 {
-    "name": "hydrust",
-    "displayName": "Hydrust",
-    "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
-    "version": "0.1.1",
-    "publisher": "m-lyon",
-    "license": "MIT",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/m-lyon/hydrust-vscode.git"
-    },
-    "engines": {
-        "vscode": "^1.75.0"
-    },
-    "categories": [
-        "Programming Languages",
-        "Machine Learning",
-        "AI",
-        "Data Science",
-        "Linters"
-    ],
-    "extensionDependencies": [
-        "ms-python.python"
-    ],
-    "activationEvents": [
-        "onLanguage:yaml",
-        "workspaceContains:**/*.yaml",
-        "workspaceContains:**/*.yml"
-    ],
-    "main": "./dist/extension.js",
-    "contributes": {
-        "configuration": {
-            "properties": {
-                "hydrust.serverPath": {
-                    "default": "",
-                    "description": "Path to the hydrust-server executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
-                    "scope": "resource",
-                    "type": "string"
-                },
-                "hydrust.pythonInterpreterPath": {
-                    "default": "",
-                    "description": "Path to the Python interpreter. If empty, will use the Python extension's interpreter.",
-                    "scope": "resource",
-                    "type": "string"
-                },
-                "hydrust.importStrategy": {
-                    "default": "fromEnvironment",
-                    "description": "Strategy for resolving the hydrust-server executable.",
-                    "enum": [
-                        "fromEnvironment",
-                        "useBundled"
-                    ],
-                    "enumDescriptions": [
-                        "Use the hydrust-server from the environment (available on PATH), whilst falling back to bundled executable if not found.",
-                        "Always use the bundled hydrust-server executable."
-                    ],
-                    "scope": "window",
-                    "type": "string"
-                },
-                "hydrust.serverVersion": {
-                    "default": "latest",
-                    "description": "The version of the Hydrust server to download. Use 'latest' for the most recent release, or specify a version like 'v0.1.0'. Only applicable if using the bundled executable.",
-                    "scope": "window",
-                    "type": "string"
-                },
-                "hydrust.logLevel": {
-                    "default": "info",
-                    "description": "The log level for the extension.",
-                    "enum": [
-                        "debug",
-                        "info",
-                        "warn",
-                        "error"
-                    ],
-                    "scope": "window",
-                    "type": "string"
-                },
-                "hydrust.traceServer": {
-                    "default": "off",
-                    "description": "Traces the communication between VS Code and the language server.",
-                    "enum": [
-                        "off",
-                        "messages",
-                        "verbose"
-                    ],
-                    "scope": "window",
-                    "type": "string"
-                },
-                "hydrust.disabledRules": {
-                    "default": [],
-                    "description": "List of diagnostic rules to disable. Available rules: missing-argument, unknown-argument, unresolved-reference, unresolved-import, invalid-target.",
-                    "scope": "resource",
-                    "items": {
-                        "type": "string",
-                        "enum": [
-                            "missing-argument",
-                            "unknown-argument",
-                            "unresolved-reference",
-                            "unresolved-import",
-                            "invalid-target"
-                        ]
-                    },
-                    "type": "array"
-                },
-                "hydrust.enableHover": {
-                    "default": true,
-                    "description": "Enable hover information for hydra targets.",
-                    "scope": "resource",
-                    "type": "boolean"
-                },
-                "hydrust.enableCompletion": {
-                    "default": true,
-                    "description": "Enable auto-completion for hydra targets.",
-                    "scope": "resource",
-                    "type": "boolean"
-                },
-                "hydrust.enableSignatureHelp": {
-                    "default": true,
-                    "description": "Enable signature help for hydra targets.",
-                    "scope": "resource",
-                    "type": "boolean"
-                },
-                "hydrust.enableGotoDefinition": {
-                    "default": true,
-                    "description": "Enable go-to-definition for hydra targets.",
-                    "scope": "resource",
-                    "type": "boolean"
-                },
-                "hydrust.enableSemanticTokens": {
-                    "default": true,
-                    "description": "Enable semantic token highlighting.",
-                    "scope": "resource",
-                    "type": "boolean"
-                },
-                "hydrust.enableDiagnostics": {
-                    "default": true,
-                    "description": "Enable diagnostics (error/warning reporting).",
-                    "scope": "resource",
-                    "type": "boolean"
-                }
-            }
+  "name": "hydrust",
+  "displayName": "Hydrust",
+  "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
+  "version": "0.1.1",
+  "publisher": "m-lyon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/m-lyon/hydrust-vscode.git"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "AI",
+    "Data Science",
+    "Linters"
+  ],
+  "extensionDependencies": [
+    "ms-python.python"
+  ],
+  "activationEvents": [
+    "onLanguage:yaml",
+    "workspaceContains:**/*.yaml",
+    "workspaceContains:**/*.yml"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "properties": {
+        "hydrust.serverPath": {
+          "default": "",
+          "description": "Path to the hydrust-server executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
+          "scope": "resource",
+          "type": "string"
         },
-        "commands": [
-            {
-                "title": "Restart server",
-                "category": "Hydrust",
-                "command": "hydrust.restart"
-            },
-            {
-                "title": "Show client logs",
-                "category": "Hydrust",
-                "command": "hydrust.showLogs"
-            },
-            {
-                "title": "Show server logs",
-                "category": "Hydrust",
-                "command": "hydrust.showServerLogs"
-            }
-        ]
-    },
-    "scripts": {
-        "compile": "webpack --mode development",
-        "watch": "webpack --mode development --watch",
-        "package": "webpack --mode production",
-        "vscode:prepublish": "npm run package",
-        "lint": "eslint src --ext ts",
-        "format": "prettier --write \"src/**/*.ts\""
-    },
-    "dependencies": {
-        "@vscode/python-extension": "^1.0.5",
-        "fs-extra": "^11.3.0",
-        "vscode-languageclient": "^9.0.1",
-        "which": "^6.0.0"
-    },
-    "devDependencies": {
-        "@types/fs-extra": "^11.0.4",
-        "@types/node": "^24.0.0",
-        "@types/vscode": "1.75.0",
-        "@types/which": "^3.0.4",
-        "@vscode/vsce": "^3.4.2",
-        "eslint": "^9.28.0",
-        "prettier": "^3.5.3",
-        "ts-loader": "^9.5.2",
-        "typescript": "^5.8.3",
-        "webpack": "^5.99.9",
-        "webpack-cli": "^6.0.1"
-    },
-    "capabilities": {
-        "untrustedWorkspaces": {
-            "supported": false,
-            "description": "This extension requires a trusted workspace to run the language server."
+        "hydrust.pythonInterpreterPath": {
+          "default": "",
+          "description": "Path to the Python interpreter. If empty, will use the Python extension's interpreter.",
+          "scope": "resource",
+          "type": "string"
+        },
+        "hydrust.importStrategy": {
+          "default": "fromEnvironment",
+          "description": "Strategy for resolving the hydrust-server executable.",
+          "enum": [
+            "fromEnvironment",
+            "useBundled"
+          ],
+          "enumDescriptions": [
+            "Use the hydrust-server from the environment (available on PATH), whilst falling back to bundled executable if not found.",
+            "Always use the bundled hydrust-server executable."
+          ],
+          "scope": "window",
+          "type": "string"
+        },
+        "hydrust.serverVersion": {
+          "default": "latest",
+          "description": "The version of the Hydrust server to download. Use 'latest' for the most recent release, or specify a version like 'v0.1.0'. Only applicable if using the bundled executable.",
+          "scope": "window",
+          "type": "string"
+        },
+        "hydrust.logLevel": {
+          "default": "info",
+          "description": "The log level for the extension.",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "scope": "window",
+          "type": "string"
+        },
+        "hydrust.traceServer": {
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server.",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "scope": "window",
+          "type": "string"
+        },
+        "hydrust.disabledRules": {
+          "default": [],
+          "description": "List of diagnostic rules to disable. Available rules: missing-argument, unknown-argument, unresolved-reference, unresolved-import, invalid-target.",
+          "scope": "resource",
+          "items": {
+            "type": "string",
+            "enum": [
+              "missing-argument",
+              "unknown-argument",
+              "unresolved-reference",
+              "unresolved-import",
+              "invalid-target"
+            ]
+          },
+          "type": "array"
+        },
+        "hydrust.enableHover": {
+          "default": true,
+          "description": "Enable hover information for hydra targets.",
+          "scope": "resource",
+          "type": "boolean"
+        },
+        "hydrust.enableCompletion": {
+          "default": true,
+          "description": "Enable auto-completion for hydra targets.",
+          "scope": "resource",
+          "type": "boolean"
+        },
+        "hydrust.enableSignatureHelp": {
+          "default": true,
+          "description": "Enable signature help for hydra targets.",
+          "scope": "resource",
+          "type": "boolean"
+        },
+        "hydrust.enableGotoDefinition": {
+          "default": true,
+          "description": "Enable go-to-definition for hydra targets.",
+          "scope": "resource",
+          "type": "boolean"
+        },
+        "hydrust.enableSemanticTokens": {
+          "default": true,
+          "description": "Enable semantic token highlighting.",
+          "scope": "resource",
+          "type": "boolean"
+        },
+        "hydrust.enableDiagnostics": {
+          "default": true,
+          "description": "Enable diagnostics (error/warning reporting).",
+          "scope": "resource",
+          "type": "boolean"
         }
+      }
+    },
+    "commands": [
+      {
+        "title": "Restart server",
+        "category": "Hydrust",
+        "command": "hydrust.restart"
+      },
+      {
+        "title": "Show client logs",
+        "category": "Hydrust",
+        "command": "hydrust.showLogs"
+      },
+      {
+        "title": "Show server logs",
+        "category": "Hydrust",
+        "command": "hydrust.showServerLogs"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "webpack --mode development",
+    "watch": "webpack --mode development --watch",
+    "package": "webpack --mode production",
+    "vscode:prepublish": "npm run package",
+    "lint": "eslint src --ext ts",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "@vscode/python-extension": "^1.0.5",
+    "fs-extra": "^11.3.0",
+    "vscode-languageclient": "^9.0.1",
+    "which": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^24.0.0",
+    "@types/vscode": "1.75.0",
+    "@types/which": "^3.0.4",
+    "@vscode/vsce": "^3.4.2",
+    "eslint": "^9.28.0",
+    "prettier": "^3.5.3",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.8.3",
+    "webpack": "^5.99.9",
+    "webpack-cli": "^6.0.1"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "This extension requires a trusted workspace to run the language server."
     }
+  },
+  "homepage": "https://github.com/m-lyon/hydrust-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/m-lyon/hydrust-vscode/issues"
+  },
+  "icon": "assets/hydrust.png",
+  "galleryBanner": {
+    "color": "#0f172a",
+    "theme": "dark"
+  },
+  "keywords": [
+    "hydra",
+    "yaml",
+    "python",
+    "lsp",
+    "language-server",
+    "configuration",
+    "machine-learning"
+  ]
 }
