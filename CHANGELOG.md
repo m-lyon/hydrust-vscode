@@ -1,5 +1,10 @@
 # Change Log
 
+## [0.1.2]
+
+- Updated docs for hydrust server `v0.3.0`
+- Added server refresh for changes to `ms-python.python` interpreter path
+
 ## [0.1.1]
 
 - Added feature toggles

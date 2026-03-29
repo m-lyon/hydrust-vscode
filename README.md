@@ -2,7 +2,7 @@
 
 A VS Code extension providing intelligent language features for [Hydra](https://hydra.cc/) configuration files. Powered by a fast Rust-based language server.
 
-If you use Hydra's `_target_` pattern to instantiate Python objects from YAML config files, Hydrust gives you hover documentation, go-to-definition, diagnostics, signature help, and semantic highlighting.
+If you use Hydra's `_target_` pattern to instantiate Python objects from YAML config files, Hydrust gives you hover documentation, go-to-definition, diagnostics, signature help, and semantic highlighting. Supports the full set of Hydra special keys: `_target_`, `_args_`, `_convert_`, and `_recursive_`.
 
 ## Features
 
@@ -23,6 +23,8 @@ Real-time validation of your Hydra configs:
 - Missing required parameters
 - Unknown parameters
 - Unresolved references and imports
+- Invalid values for Hydra special keys
+- Parameters provided both positionally via `_args_` and as keyword arguments
 
 Individual diagnostic rules can be disabled globally via the `hydrust.disabledRules` setting, or suppressed directly in your `yaml` files using `# hydrust: ignore[...]` comments.
 
@@ -44,11 +46,11 @@ db:
   host: localhost  # hydrust: ignore[unknown-argument]
 ```
 
-Available rules: `missing-argument`, `unknown-argument`, `unresolved-reference`, `unresolved-import`, `invalid-target`.
+Available rules: `missing-argument`, `unknown-argument`, `unresolved-reference`, `unresolved-import`, `invalid-hydra-parameter`.
 
 ### Signature Help
 
-Displays parameter information as you type, showing parameter names, types, and default values.
+Displays parameter information as you type, showing parameter names, types, and default values. Supports both keyword parameters for `_target_` and positional arguments within `_args_` sequences.
 
 ### Semantic Highlighting
 

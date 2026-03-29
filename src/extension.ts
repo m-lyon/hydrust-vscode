@@ -83,6 +83,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
     };
 
+    // Listen for Python interpreter changes from ms-python extension
+    try {
+        const pythonExtension = vscode.extensions.getExtension('ms-python.python');
+        if (pythonExtension) {
+            if (!pythonExtension.isActive) {
+                await pythonExtension.activate();
+            }
+            const pythonApi = pythonExtension.exports;
+            if (pythonApi?.environments?.onDidChangeActiveEnvironmentPath) {
+                context.subscriptions.push(
+                    pythonApi.environments.onDidChangeActiveEnvironmentPath(async () => {
+                        logger.info('Python environment changed, restarting server...');
+                        await runServer();
+                    }),
+                );
+            }
+        }
+    } catch (error) {
+        logger.warn(`Failed to register Python environment change listener: ${error}`);
+    }
+
     // Register event handlers
     context.subscriptions.push(
         onDidChangeConfiguration(async (e: vscode.ConfigurationChangeEvent) => {

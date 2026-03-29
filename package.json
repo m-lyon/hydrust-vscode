@@ -2,7 +2,7 @@
   "name": "hydrust",
   "displayName": "Hydrust",
   "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "m-lyon",
   "license": "MIT",
   "repository": {
