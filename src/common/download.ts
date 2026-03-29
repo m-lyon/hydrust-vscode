@@ -324,17 +324,36 @@ export async function needsDownload(
 }
 
 /**
+ * Singleton guard: if a download is already in progress, all concurrent callers
+ * will await the same promise rather than triggering a second download.
+ */
+let activeDownload: Promise<string> | undefined;
+
+/**
  * Ensure the server binary is available, downloading if necessary
  */
 export async function ensureServer(
     version: string,
     context: vscode.ExtensionContext
 ): Promise<string> {
+    // If a download is already running, wait for it instead of starting a new one
+    if (activeDownload) {
+        logger.info('Download already in progress, waiting for it to complete...');
+        return activeDownload;
+    }
+
     if (await needsDownload(version, context)) {
+        // Re-check after the async needsDownload call: another caller may have
+        // started the download while we were awaiting.
+        if (activeDownload) {
+            logger.info('Download started by another caller, waiting...');
+            return activeDownload;
+        }
+
         logger.info(`Downloading Hydrust Server version: ${version}`);
 
         // Show progress to user
-        return await vscode.window.withProgress(
+        activeDownload = Promise.resolve(vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
                 title: 'Hydrust Server',
@@ -345,7 +364,11 @@ export async function ensureServer(
                     progress.report({ message });
                 });
             }
-        );
+        )).finally(() => {
+            activeDownload = undefined;
+        });
+
+        return activeDownload;
     }
 
     // Binary exists, return the versioned path

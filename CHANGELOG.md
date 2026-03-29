@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.1.3]
+
+- Fix to server restart race condition when reloading VSCode window
+
 ## [0.1.2]
 
 - Updated docs for hydrust server `v0.3.0`

@@ -6,6 +6,7 @@ import { getExtensionSettings, checkIfConfigurationChanged } from './common/sett
 import { getProjectRoot, registerCommand, onDidChangeConfiguration } from './common/vscodeapi';
 
 let lsClient: LanguageClient | undefined;
+let pendingRunServer: Promise<void> | undefined;
 
 /**
  * Server information
@@ -47,8 +48,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(traceOutputChannel);
     context.subscriptions.push(logger.channel);
 
-    // Server startup function
+    // Server startup function — serialized so concurrent triggers don't overlap.
+    // If a restart is already running, each new request waits for the current one
+    // to finish before starting another (at most one queued restart at a time).
+    let nextRunServer: Promise<void> | undefined;
+
     const runServer = async () => {
+        if (pendingRunServer) {
+            // Chain: wait for the running restart, then do one more.
+            if (!nextRunServer) {
+                nextRunServer = pendingRunServer.then(doRunServer, doRunServer).finally(() => {
+                    nextRunServer = undefined;
+                });
+            }
+            return nextRunServer;
+        }
+        pendingRunServer = doRunServer().finally(() => {
+            pendingRunServer = undefined;
+        });
+        return pendingRunServer;
+    };
+
+    const doRunServer = async () => {
         try {
             if (lsClient) {
                 await stopServer(lsClient);
