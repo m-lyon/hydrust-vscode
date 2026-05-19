@@ -7,10 +7,32 @@ import { promisify } from 'util';
 import { exec } from 'child_process';
 import { logger } from './logger';
 import { BINARY_NAME, getPlatformInfo, getDownloadUrl, getChecksumUrl } from './constants';
-import { getVersionedDir, getExecutablePath, isWindows } from './constants';
+import { getVersionedDir, getExecutablePath, getLibsRoot, isWindows } from './constants';
 import { fsapi } from './vscodeapi';
+import { isDeveloperMode } from './settings';
 
 const execAsync = promisify(exec);
+
+/**
+ * In developer mode, log full details and surface a popup with a "Show Logs"
+ * action that reveals the Hydrust output channel. No-op otherwise.
+ */
+function notifyDeveloper(summary: string, ...details: unknown[]): void {
+    if (!isDeveloperMode()) {
+        return;
+    }
+    logger.error(summary, ...details);
+    void vscode.window
+        .showErrorMessage(
+            `Hydrust: ${summary} See the Hydrust output channel for details.`,
+            'Show Logs'
+        )
+        .then((selection) => {
+            if (selection === 'Show Logs') {
+                logger.channel.show();
+            }
+        });
+}
 
 /**
  * Download a file from a URL
@@ -89,6 +111,11 @@ async function verifyChecksum(filePath: string, checksumUrl: string): Promise<bo
         return isValid;
     } catch (err) {
         logger.warn(`Failed to verify checksum: ${err}`);
+        notifyDeveloper(
+            `Checksum verification was skipped because the checksum file could not be fetched (${checksumUrl}).`,
+            'Error:',
+            err
+        );
         // Don't fail the download if checksum verification fails
         return true;
     }
@@ -180,6 +207,11 @@ async function getLatestVersion(): Promise<string> {
                 try {
                     const releases = JSON.parse(data);
                     if (!Array.isArray(releases)) {
+                        notifyDeveloper(
+                            `Unexpected response from GitHub releases API (status ${response.statusCode}).`,
+                            'Parsed payload:',
+                            releases
+                        );
                         reject(new Error('Unexpected response from GitHub releases API'));
                         return;
                     }
@@ -195,39 +227,65 @@ async function getLatestVersion(): Promise<string> {
                             return;
                         }
                     }
+                    notifyDeveloper(
+                        `No GitHub release found with asset matching '${expectedAssetName}'.`,
+                        'Inspected releases:',
+                        releases.map((r: { tag_name?: string; assets?: { name: string }[] }) => ({
+                            tag_name: r.tag_name,
+                            asset_names: Array.isArray(r.assets) ? r.assets.map((a) => a.name) : [],
+                        }))
+                    );
                     reject(new Error(`No release found with asset matching '${expectedAssetName}'`));
                 } catch (err) {
+                    notifyDeveloper(
+                        `Failed to parse GitHub releases API response (status ${response.statusCode}).`,
+                        'Error:',
+                        err,
+                        'Raw body:',
+                        data
+                    );
                     reject(err);
                 }
             });
-        }).on('error', reject);
+        }).on('error', (err) => {
+            notifyDeveloper(
+                'Network error while contacting the GitHub releases API.',
+                'Error:',
+                err
+            );
+            reject(err);
+        });
     });
 }
 
 /**
- * Download and install the Hydrust Server binary
+ * Resolve a version string to a concrete, v-prefixed tag.
+ * 'latest' (or empty) hits the GitHub API; anything else is normalized in place.
  */
-export async function downloadServer(
-    version: string,
+async function resolveVersion(version: string): Promise<string> {
+    let resolved = version;
+    if (version === 'latest' || !version) {
+        resolved = await getLatestVersion();
+        logger.info(`Latest version resolved to: ${resolved}`);
+    }
+    if (!resolved.startsWith('v')) {
+        resolved = `v${resolved}`;
+    }
+    return resolved;
+}
+
+/**
+ * Download and install the Hydrust Server binary.
+ * `resolvedVersion` must already be a concrete, v-prefixed tag (see resolveVersion).
+ */
+async function downloadServer(
+    resolvedVersion: string,
     context: vscode.ExtensionContext,
     progressCallback?: (message: string) => void
 ): Promise<string> {
     const progress = progressCallback || ((msg: string) => logger.info(msg));
 
     try {
-        // Resolve version
-        let resolvedVersion = version;
-        if (version === 'latest' || !version) {
-            progress('Fetching latest release version...');
-            resolvedVersion = await getLatestVersion();
-            logger.info(`Latest version: ${resolvedVersion}`);
-        }
-
-        // Ensure version starts with 'v'
-        if (!resolvedVersion.startsWith('v')) {
-            resolvedVersion = `v${resolvedVersion}`;
-        }
-
         // Get platform info
         const platformInfo = getPlatformInfo();
         logger.info(`Platform: ${platformInfo.platform}`);
@@ -286,33 +344,15 @@ export async function downloadServer(
 }
 
 /**
- * Check if the server binary needs to be downloaded
+ * Check if the server binary needs to be downloaded.
+ * `resolvedVersion` must already be a concrete, v-prefixed tag (see resolveVersion).
  */
-export async function needsDownload(
-    version: string,
+async function needsDownload(
+    resolvedVersion: string,
     context: vscode.ExtensionContext
 ): Promise<boolean> {
-    // Resolve version if 'latest'
-    let resolvedVersion = version;
-    if (version === 'latest' || !version) {
-        try {
-            resolvedVersion = await getLatestVersion();
-            logger.info(`Latest version resolved to: ${resolvedVersion}`);
-        } catch (err) {
-            logger.warn(`Failed to resolve latest version: ${err}`);
-            // If we can't resolve latest, we need to download
-            return true;
-        }
-    }
-
-    // Ensure version starts with 'v'
-    if (!resolvedVersion.startsWith('v')) {
-        resolvedVersion = `v${resolvedVersion}`;
-    }
-
     const executablePath = getExecutablePath(context, resolvedVersion);
 
-    // Check if executable exists in the versioned directory
     const exists = await fsapi.pathExists(executablePath);
     if (!exists) {
         logger.info(`Binary for version ${resolvedVersion} not found, download needed`);
@@ -342,7 +382,9 @@ export async function ensureServer(
         return activeDownload;
     }
 
-    if (await needsDownload(version, context)) {
+    const resolvedVersion = await resolveVersion(version);
+
+    if (await needsDownload(resolvedVersion, context)) {
         // Re-check after the async needsDownload call: another caller may have
         // started the download while we were awaiting.
         if (activeDownload) {
@@ -350,7 +392,7 @@ export async function ensureServer(
             return activeDownload;
         }
 
-        logger.info(`Downloading Hydrust Server version: ${version}`);
+        logger.info(`Downloading Hydrust Server version: ${resolvedVersion}`);
 
         // Show progress to user
         activeDownload = Promise.resolve(vscode.window.withProgress(
@@ -360,7 +402,7 @@ export async function ensureServer(
                 cancellable: false,
             },
             async (progress) => {
-                return await downloadServer(version, context, (message) => {
+                return await downloadServer(resolvedVersion, context, (message) => {
                     progress.report({ message });
                 });
             }
@@ -371,16 +413,66 @@ export async function ensureServer(
         return activeDownload;
     }
 
-    // Binary exists, return the versioned path
-    let resolvedVersion = version;
-    if (version === 'latest' || !version) {
-        resolvedVersion = await getLatestVersion();
-    }
-
-    // Ensure version starts with 'v'
-    if (!resolvedVersion.startsWith('v')) {
-        resolvedVersion = `v${resolvedVersion}`;
-    }
-
     return getExecutablePath(context, resolvedVersion);
+}
+
+/**
+ * Compare two version directory names (without 'v' prefix) descending.
+ * Semver-aware on numeric segments; falls back to localeCompare for non-numeric tags.
+ */
+function compareVersionsDesc(a: string, b: string): number {
+    const parseSegs = (v: string): number[] | null => {
+        const segs = v.split('.').map((s) => parseInt(s, 10));
+        return segs.every((n) => Number.isFinite(n)) ? segs : null;
+    };
+    const aSegs = parseSegs(a);
+    const bSegs = parseSegs(b);
+    if (aSegs && bSegs) {
+        const len = Math.max(aSegs.length, bSegs.length);
+        for (let i = 0; i < len; i++) {
+            const diff = (bSegs[i] ?? 0) - (aSegs[i] ?? 0);
+            if (diff !== 0) {
+                return diff;
+            }
+        }
+        return 0;
+    }
+    return b.localeCompare(a);
+}
+
+/**
+ * Scan the bundled libs directory for any previously-installed binary and
+ * return the path to the newest one (by semver). Returns undefined if none
+ * exists or the directory can't be read.
+ *
+ * Used as a fallback when the normal download/resolve path fails (e.g. no
+ * network) so the extension can still start with a previously-cached binary.
+ */
+export async function findExistingExecutable(
+    context: vscode.ExtensionContext
+): Promise<string | undefined> {
+    const libsRoot = getLibsRoot(context);
+
+    let entries: string[];
+    try {
+        entries = await fs.readdir(libsRoot);
+    } catch (err) {
+        logger.debug(`No bundled libs directory to scan for fallback: ${err}`);
+        return undefined;
+    }
+
+    const candidates: { version: string; execPath: string }[] = [];
+    for (const entry of entries) {
+        const execPath = getExecutablePath(context, entry);
+        if (await fsapi.pathExists(execPath)) {
+            candidates.push({ version: entry, execPath });
+        }
+    }
+
+    if (candidates.length === 0) {
+        return undefined;
+    }
+
+    candidates.sort((a, b) => compareVersionsDesc(a.version, b.version));
+    return candidates[0].execPath;
 }

@@ -4,7 +4,7 @@ import which from 'which';
 import { logger } from './logger';
 import { BINARY_NAME } from './constants';
 import { ExtensionSettings } from './settings';
-import { ensureServer } from './download';
+import { ensureServer, findExistingExecutable } from './download';
 import { fsapi } from './vscodeapi';
 import {
     LanguageClient,
@@ -40,9 +40,23 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
         }
     }
 
-    // 3. Fallback to bundled
+    // 3. Fallback to bundled (download if needed)
     logger.info('Falling back to bundled executable');
-    return await ensureServer(settings.serverVersion, context);
+    try {
+        return await ensureServer(settings.serverVersion, context);
+    } catch (err) {
+        // ensureServer can fail for network/API reasons (GitHub down, offline,
+        // unexpected payload, etc.). Before giving up, look for a previously
+        // downloaded binary on disk so the extension can still start.
+        logger.warn(`ensureServer failed: ${err}`);
+        const cached = await findExistingExecutable(context);
+        if (cached) {
+            logger.warn(`Falling back to previously installed binary: ${cached}`);
+            return cached;
+        }
+        logger.error('No previously installed binary available to fall back to.');
+        throw err;
+    }
 }
 
 /**

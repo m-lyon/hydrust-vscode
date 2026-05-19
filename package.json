@@ -2,7 +2,7 @@
   "name": "hydrust",
   "displayName": "Hydrust",
   "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "m-lyon",
   "license": "MIT",
   "repository": {
@@ -136,6 +136,12 @@
           "default": true,
           "description": "Enable diagnostics (error/warning reporting).",
           "scope": "resource",
+          "type": "boolean"
+        },
+        "hydrust.developerMode": {
+          "default": false,
+          "description": "Enable developer mode for verbose diagnostics. When enabled, the extension logs additional internal details (such as raw API payloads on unexpected responses) and surfaces popup notifications directing you to the Hydrust output channel.",
+          "scope": "window",
           "type": "boolean"
         }
       }

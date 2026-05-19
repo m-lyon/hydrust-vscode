@@ -17,6 +17,17 @@ export interface ExtensionSettings {
     enableGotoDefinition: boolean;
     enableSemanticTokens: boolean;
     enableDiagnostics: boolean;
+    developerMode: boolean;
+}
+
+/**
+ * Read the developer-mode flag directly from configuration.
+ *
+ * Used by call sites (e.g. background download paths) that don't have the
+ * full ExtensionSettings object threaded through to them.
+ */
+export function isDeveloperMode(serverId: string = 'hydrust'): boolean {
+    return vscode.workspace.getConfiguration(serverId).get<boolean>('developerMode', false);
 }
 
 /**
@@ -39,6 +50,7 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
         enableGotoDefinition: config.get<boolean>('enableGotoDefinition', true),
         enableSemanticTokens: config.get<boolean>('enableSemanticTokens', true),
         enableDiagnostics: config.get<boolean>('enableDiagnostics', true),
+        developerMode: config.get<boolean>('developerMode', false),
     };
 }
 
@@ -50,6 +62,7 @@ export function checkIfConfigurationChanged(e: vscode.ConfigurationChangeEvent, 
         'serverPath', 'pythonInterpreterPath', 'importStrategy', 'serverVersion', 'logLevel', 'traceServer', 'disabledRules',
         'enableHover', 'enableCompletion', 'enableSignatureHelp',
         'enableGotoDefinition', 'enableSemanticTokens', 'enableDiagnostics',
+        'developerMode',
     ];
     return sections.some((section) => e.affectsConfiguration(`${serverId}.${section}`));
 }

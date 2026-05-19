@@ -96,12 +96,20 @@ export function getExecutablePath(context: any, version: string): string {
 }
 
 /**
+ * Get the root directory that holds all per-version subdirectories of the
+ * bundled server.
+ */
+export function getLibsRoot(context: any): string {
+    return path.join(context.extensionPath, 'bundled', 'libs');
+}
+
+/**
  * Get the versioned directory path for a specific version
  */
 export function getVersionedDir(context: any, version: string): string {
     // Normalize version (remove 'v' prefix for directory name)
     const normalizedVersion = version.startsWith('v') ? version.slice(1) : version;
-    return path.join(context.extensionPath, 'bundled', 'libs', normalizedVersion);
+    return path.join(getLibsRoot(context), normalizedVersion);
 }
 
 /**
