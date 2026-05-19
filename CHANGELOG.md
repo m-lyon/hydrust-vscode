@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.1.4]
+
+- Added fallback to on-disk executable if latest version search fails.
+
 ## [0.1.3]
 
 - Fix to server restart race condition when reloading VSCode window
