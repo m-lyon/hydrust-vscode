@@ -364,10 +364,20 @@ async function needsDownload(
 }
 
 /**
+ * A binary on disk, together with the release tag it came from.
+ */
+export interface InstalledServer {
+    /** Absolute path to the executable. */
+    path: string;
+    /** The concrete, v-prefixed release tag, e.g. 'v0.3.0'. */
+    version: string;
+}
+
+/**
  * Singleton guard: if a download is already in progress, all concurrent callers
  * will await the same promise rather than triggering a second download.
  */
-let activeDownload: Promise<string> | undefined;
+let activeDownload: Promise<InstalledServer> | undefined;
 
 /**
  * Ensure the server binary is available, downloading if necessary
@@ -375,7 +385,7 @@ let activeDownload: Promise<string> | undefined;
 export async function ensureServer(
     version: string,
     context: vscode.ExtensionContext
-): Promise<string> {
+): Promise<InstalledServer> {
     // If a download is already running, wait for it instead of starting a new one
     if (activeDownload) {
         logger.info('Download already in progress, waiting for it to complete...');
@@ -402,9 +412,10 @@ export async function ensureServer(
                 cancellable: false,
             },
             async (progress) => {
-                return await downloadServer(resolvedVersion, context, (message) => {
+                const executablePath = await downloadServer(resolvedVersion, context, (message) => {
                     progress.report({ message });
                 });
+                return { path: executablePath, version: resolvedVersion };
             }
         )).finally(() => {
             activeDownload = undefined;
@@ -413,7 +424,7 @@ export async function ensureServer(
         return activeDownload;
     }
 
-    return getExecutablePath(context, resolvedVersion);
+    return { path: getExecutablePath(context, resolvedVersion), version: resolvedVersion };
 }
 
 /**
@@ -450,7 +461,7 @@ function compareVersionsDesc(a: string, b: string): number {
  */
 export async function findExistingExecutable(
     context: vscode.ExtensionContext
-): Promise<string | undefined> {
+): Promise<InstalledServer | undefined> {
     const libsRoot = getLibsRoot(context);
 
     let entries: string[];
@@ -474,5 +485,7 @@ export async function findExistingExecutable(
     }
 
     candidates.sort((a, b) => compareVersionsDesc(a.version, b.version));
-    return candidates[0].execPath;
+    const newest = candidates[0];
+    // Directory names have no 'v' prefix; put it back so callers see a tag.
+    return { path: newest.execPath, version: `v${newest.version}` };
 }

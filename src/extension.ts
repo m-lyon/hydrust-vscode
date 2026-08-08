@@ -4,6 +4,7 @@ import { LazyOutputChannel, logger } from "./common/logger";
 import { startServer, stopServer } from './common/server';
 import { getExtensionSettings, checkIfConfigurationChanged } from './common/settings';
 import { getProjectRoot, registerCommand, onDidChangeConfiguration } from './common/vscodeapi';
+import { CompatReporter } from './common/compat';
 
 let lsClient: LanguageClient | undefined;
 let pendingRunServer: Promise<void> | undefined;
@@ -48,6 +49,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(traceOutputChannel);
     context.subscriptions.push(logger.channel);
 
+    // Tracks which server is running and what it supports. Lives for the whole
+    // session and is refreshed after every start, so the `when` clause contexts
+    // and the "Show server info" command survive restarts.
+    const compatReporter = new CompatReporter(serverId);
+
     // Server startup function — serialized so concurrent triggers don't overlap.
     // If a restart is already running, each new request waits for the current one
     // to finish before starting another (at most one queued restart at a time).
@@ -73,6 +79,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         try {
             if (lsClient) {
                 await stopServer(lsClient);
+                lsClient = undefined;
+                await compatReporter.update(undefined);
             }
 
             const projectRoot = await getProjectRoot();
@@ -90,17 +98,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 logger.info('No Python interpreter found, Hydrust will attempt to auto-detect one.');
             }
 
-            lsClient = await startServer(settings, serverId, serverName, outputChannel, traceOutputChannel, context);
+            const started = await startServer(
+                settings,
+                serverId,
+                serverName,
+                outputChannel,
+                traceOutputChannel,
+                context,
+                projectRoot
+            );
+            lsClient = started.client;
 
             // Set up client event handlers
             lsClient.onDidChangeState((event) => {
                 logger.debug(`Client state changed: ${JSON.stringify(event)}`);
             });
 
+            await compatReporter.update(started.compat);
+
         } catch (err) {
             const message = `Failed to start Hydrust Server: ${err}`;
             logger.error(message);
             vscode.window.showErrorMessage(message);
+            await compatReporter.update(undefined);
         }
     };
 
@@ -143,6 +163,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         registerCommand(`${serverId}.showServerLogs`, () => {
             outputChannel.show();
         }),
+        registerCommand(`${serverId}.showServerInfo`, () => {
+            compatReporter.showDetails();
+        }),
     );
 
     // Initialize
@@ -158,7 +181,10 @@ export async function deactivate(): Promise<void> {
     logger.info('Deactivating Hydrust extension...');
     if (lsClient) {
         await stopServer(lsClient);
+        lsClient = undefined;
     }
+    // The status bar item and its listeners are disposed through
+    // context.subscriptions, so there is nothing extra to tear down here.
 }
 
 // Add this function to get the Python interpreter
