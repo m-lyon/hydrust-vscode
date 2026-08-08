@@ -6,6 +6,7 @@ import { BINARY_NAME } from './constants';
 import { ExtensionSettings } from './settings';
 import { ensureServer, findExistingExecutable } from './download';
 import { ResolvedBinary, ServerCompat } from './compat';
+import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
 import {
     LanguageClient,
@@ -121,20 +122,7 @@ export async function startServer(
         debug: serverExecutable,
     };
 
-    const initializationSettings = compat.transformSettings({
-        pythonInterpreter: settings.interpreter ? settings.interpreter : undefined,
-        disabledRules: settings.disabledRules,
-        enableHover: settings.enableHover,
-        enableCompletion: settings.enableCompletion,
-        enableSignatureHelp: settings.enableSignatureHelp,
-        enableGotoDefinition: settings.enableGotoDefinition,
-        enableSemanticTokens: settings.enableSemanticTokens,
-        enableDiagnostics: settings.enableDiagnostics,
-        // Omit the setting entirely when left at 0: the server sizes its
-        // thread pools from the CPU count when the value is absent, but
-        // clamps an explicit 0 up to a single thread.
-        numThreads: settings.numThreads > 0 ? settings.numThreads : undefined,
-    });
+    const initializationSettings = compat.transformSettings(buildInitializationSettings(settings));
 
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'yaml' }],
@@ -157,7 +145,13 @@ export async function startServer(
     }
 
     // The server has now told us who it is, which beats anything guessed above.
-    await compat.afterLaunch(client.initializeResult, context);
+    // Failing here must not throw: the client is already running, and the caller
+    // only gets a handle to stop it if this function returns.
+    try {
+        await compat.afterLaunch(client.initializeResult, context);
+    } catch (err) {
+        logger.warn(`Could not work out what the running server supports: ${err}`);
+    }
 
     return { client, compat };
 }

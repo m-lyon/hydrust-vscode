@@ -183,7 +183,7 @@ export async function deactivate(): Promise<void> {
         await stopServer(lsClient);
         lsClient = undefined;
     }
-    // The status bar item and its listeners are disposed through
+    // The output channels, commands and listeners are disposed through
     // context.subscriptions, so there is nothing extra to tear down here.
 }
 

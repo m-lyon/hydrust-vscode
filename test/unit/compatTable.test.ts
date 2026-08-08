@@ -507,13 +507,34 @@ describe('transformSettingsPayload', () => {
         expect(transformSettingsPayload({ disabledRules: undefined }, v(0, 2, 0)).rewrites).toEqual([]);
     });
 
-    it('drops non-string entries only when it has to rewrite', () => {
+    it('drops non-string entries and reports them', () => {
         const result = transformSettingsPayload(
             { disabledRules: ['invalid-hydra-parameter', 42, null] },
             v(0, 2, 0)
         );
 
         expect(result.payload.disabledRules).toEqual(['invalid-target']);
+        expect(result.droppedRules).toEqual([42, null]);
+    });
+
+    it('drops non-string entries even when nothing has to be rewritten', () => {
+        // The list the server sees must not depend on whether an unrelated
+        // rename happened to apply.
+        const result = transformSettingsPayload(
+            { disabledRules: ['invalid-hydra-parameter', 42, null] },
+            v(0, 3, 0)
+        );
+
+        expect(result.payload.disabledRules).toEqual(['invalid-hydra-parameter']);
+        expect(result.rewrites).toEqual([]);
+        expect(result.droppedRules).toEqual([42, null]);
+    });
+
+    it('drops non-string entries even when the version is unknown', () => {
+        const result = transformSettingsPayload({ disabledRules: ['missing-argument', 42] }, undefined);
+
+        expect(result.payload.disabledRules).toEqual(['missing-argument']);
+        expect(result.droppedRules).toEqual([42]);
     });
 });
 

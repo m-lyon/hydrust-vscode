@@ -31,6 +31,9 @@ export const PROBE_TIMEOUT_MS = 2000;
 /** globalState key holding remembered `--version` results. */
 export const PROBE_CACHE_KEY = 'hydrust.serverVersionProbe.v1';
 
+/** How many probe results to keep. The oldest are dropped past this. */
+export const PROBE_CACHE_LIMIT = 32;
+
 /** A server binary the extension has picked out, before it has been started. */
 export interface ResolvedBinary {
     /** Absolute path to the executable. */
@@ -162,14 +165,33 @@ async function probeBinaryVersion(
     return version;
 }
 
-/** Store a probe result (or the lack of one) against a binary fingerprint. */
+/**
+ * Store a probe result (or the lack of one) against a binary fingerprint.
+ *
+ * The fingerprint changes every time the binary is replaced, so without a cap
+ * the cache would collect one dead entry per upgrade and keep it for the life
+ * of the install. Entries are rewritten in order with the newest last, and
+ * anything past the cap falls off the front.
+ */
 async function rememberVersion(
     context: vscode.ExtensionContext,
     fingerprint: string,
     version: ServerVersion | undefined
 ): Promise<void> {
-    const cache = { ...context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {}) };
+    const existing = context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {});
+    const cache: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(existing)) {
+        if (key !== fingerprint) {
+            cache[key] = value;
+        }
+    }
     cache[fingerprint] = version ? formatServerVersion(version) : null;
+
+    const keys = Object.keys(cache);
+    for (const stale of keys.slice(0, Math.max(0, keys.length - PROBE_CACHE_LIMIT))) {
+        delete cache[stale];
+    }
+
     await context.globalState.update(PROBE_CACHE_KEY, cache);
 }
 
@@ -179,11 +201,28 @@ function valuesEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * The configuration scopes VS Code resolves, strongest first.
+ *
+ * A folder value beats a workspace value, which beats a user value, and a
+ * language-specific value beats the plain value in the same scope. The list has
+ * to be walked in this order: taking the first scope that happens to hold a
+ * value would report a setting the server never sees.
+ */
+const SCOPE_PRECEDENCE = [
+    'workspaceFolderLanguageValue',
+    'workspaceFolderValue',
+    'workspaceLanguageValue',
+    'workspaceValue',
+    'globalLanguageValue',
+    'globalValue',
+] as const;
+
+/**
  * List the settings the user has actually changed.
  *
  * A setting left at its default is not worth warning about, even if the server
- * ignores it, so only settings with an explicit non-default value anywhere in
- * the user's configuration are returned.
+ * ignores it, so only settings whose effective value differs from the default
+ * are returned.
  */
 function findConfiguredSettings(serverId: string, resource: vscode.Uri | undefined): string[] {
     const config = vscode.workspace.getConfiguration(serverId, resource);
@@ -194,17 +233,11 @@ function findConfiguredSettings(serverId: string, resource: vscode.Uri | undefin
         if (!details) {
             continue;
         }
-        const explicit =
-            details.globalValue ??
-            details.workspaceValue ??
-            details.workspaceFolderValue ??
-            details.globalLanguageValue ??
-            details.workspaceLanguageValue ??
-            details.workspaceFolderLanguageValue;
-        if (explicit === undefined) {
+        const effective = SCOPE_PRECEDENCE.map((scope) => details[scope]).find((value) => value !== undefined);
+        if (effective === undefined) {
             continue;
         }
-        if (valuesEqual(explicit, details.defaultValue)) {
+        if (valuesEqual(effective, details.defaultLanguageValue ?? details.defaultValue)) {
             continue;
         }
         configured.push(setting.configKey);
@@ -291,7 +324,13 @@ export class ServerCompat {
      * differently. Nothing is changed when the version is unknown.
      */
     transformSettings(payload: Record<string, unknown>): Record<string, unknown> {
-        const { payload: next, rewrites } = transformSettingsPayload(payload, this.version);
+        const { payload: next, rewrites, droppedRules } = transformSettingsPayload(payload, this.version);
+        for (const dropped of droppedRules) {
+            logger.warn(
+                `Ignoring ${this.serverId}.disabledRules entry ${JSON.stringify(dropped)}: ` +
+                'rule codes have to be strings.'
+            );
+        }
         for (const rewrite of rewrites) {
             logger.info(
                 `Sending disabled rule '${rewrite.from}' as '${rewrite.to}': that is what ` +
@@ -479,9 +518,7 @@ export class CompatReporter {
         const names = new Set([...FEATURE_COMPAT.map((feature) => feature.name), ...Object.keys(available)]);
 
         for (const stale of this.publishedContexts) {
-            if (!names.has(stale)) {
-                names.add(stale);
-            }
+            names.add(stale);
         }
 
         for (const name of names) {
@@ -492,6 +529,13 @@ export class CompatReporter {
             );
         }
 
-        this.publishedContexts = new Set(names);
+        // Only the keys currently on need clearing next time. A key already
+        // published as false is off whatever the next server looks like, so
+        // keeping it here would grow the set for the rest of the session.
+        this.publishedContexts = new Set(
+            Object.entries(available)
+                .filter(([, isAvailable]) => isAvailable)
+                .map(([name]) => name)
+        );
     }
 }

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
     CompatReporter,
     PROBE_CACHE_KEY,
+    PROBE_CACHE_LIMIT,
     PROBE_TIMEOUT_MS,
     ResolvedBinary,
     ServerCompat,
@@ -274,6 +275,34 @@ describe('the probe cache', () => {
         expect(probeCache()['/somewhere/else|1|2']).toBe('v0.1.0');
         expect(probeCache()[fingerprintOf(file)]).toBeNull();
     });
+
+    it('drops the oldest entries once it is full', async () => {
+        // Every upgrade of the binary makes a new fingerprint, so without a cap
+        // the cache would keep one dead entry per upgrade forever.
+        const seeded: Record<string, string | null> = {};
+        for (let index = 0; index < PROBE_CACHE_LIMIT; index += 1) {
+            seeded[`/old/binary-${index}|1|2`] = 'v0.1.0';
+        }
+        stub.globalState.set(PROBE_CACHE_KEY, seeded);
+
+        const file = writeUnrunnableFile('opaque-server');
+        await ServerCompat.beforeLaunch(binary(file), SERVER_ID, [], undefined, asExtensionContext(context));
+
+        const cache = probeCache();
+        expect(Object.keys(cache)).toHaveLength(PROBE_CACHE_LIMIT);
+        expect(cache['/old/binary-0|1|2']).toBeUndefined();
+        expect(cache[`/old/binary-${PROBE_CACHE_LIMIT - 1}|1|2`]).toBe('v0.1.0');
+        expect(cache[fingerprintOf(file)]).toBeNull();
+    });
+
+    it('refreshes an existing entry rather than adding a second one', async () => {
+        const file = writeUnrunnableFile('opaque-server');
+        stub.globalState.set(PROBE_CACHE_KEY, { [fingerprintOf(file)]: 'corrupted' });
+
+        await ServerCompat.beforeLaunch(binary(file), SERVER_ID, [], undefined, asExtensionContext(context));
+
+        expect(Object.keys(probeCache())).toEqual([fingerprintOf(file)]);
+    });
 });
 
 describe('afterLaunch writing the real version back to the cache', () => {
@@ -462,6 +491,40 @@ describe('which settings count as configured', () => {
         );
 
         expect(compat.unsupportedSettings.map((entry) => entry.name)).toEqual(['numThreads']);
+    });
+
+    it('follows the scope precedence when two scopes disagree', async () => {
+        // User settings leave numThreads at the default, the workspace changes
+        // it. The workspace wins, so the user does need telling.
+        configure({ key: `${SERVER_ID}.numThreads`, defaultValue: 0, globalValue: 0, workspaceValue: 8 });
+        const file = writeUnrunnableFile('silent-server');
+
+        const compat = await ServerCompat.beforeLaunch(
+            binary(file),
+            SERVER_ID,
+            [],
+            undefined,
+            asExtensionContext(context)
+        );
+
+        expect(compat.unsupportedSettings.map((entry) => entry.name)).toEqual(['numThreads']);
+    });
+
+    it('says nothing when the winning scope puts the value back to the default', async () => {
+        // The other way round: the workspace overrides the user's 8 with the
+        // default, so the server is sent the default and there is nothing to warn about.
+        configure({ key: `${SERVER_ID}.numThreads`, defaultValue: 0, globalValue: 8, workspaceValue: 0 });
+        const file = writeUnrunnableFile('silent-server');
+
+        const compat = await ServerCompat.beforeLaunch(
+            binary(file),
+            SERVER_ID,
+            [],
+            undefined,
+            asExtensionContext(context)
+        );
+
+        expect(compat.unsupportedSettings).toEqual([]);
     });
 
     it('compares structured values by content rather than by identity', async () => {

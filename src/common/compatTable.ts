@@ -569,21 +569,24 @@ export function transformDisabledRules(
 /**
  * Apply every payload adjustment an older server needs.
  *
+ * Anything in `disabledRules` that is not a string is dropped, whether or not a
+ * rename also applies, so the server is sent the same list either way. The
+ * dropped entries come back so the caller can say what it threw away.
+ *
  * Returns a fresh object; the input is left untouched.
  */
 export function transformSettingsPayload(
     payload: Readonly<Record<string, unknown>>,
     version: ServerVersion | undefined
-): { payload: Record<string, unknown>; rewrites: RuleRewrite[] } {
+): { payload: Record<string, unknown>; rewrites: RuleRewrite[]; droppedRules: unknown[] } {
     const next: Record<string, unknown> = { ...payload };
     const disabledRules = next.disabledRules;
     if (!Array.isArray(disabledRules)) {
-        return { payload: next, rewrites: [] };
+        return { payload: next, rewrites: [], droppedRules: [] };
     }
     const codes = disabledRules.filter((entry): entry is string => typeof entry === 'string');
+    const droppedRules = disabledRules.filter((entry) => typeof entry !== 'string');
     const { rules, rewrites } = transformDisabledRules(codes, version);
-    if (rewrites.length > 0) {
-        next.disabledRules = rules;
-    }
-    return { payload: next, rewrites };
+    next.disabledRules = rules;
+    return { payload: next, rewrites, droppedRules };
 }
