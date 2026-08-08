@@ -58,6 +58,18 @@ describe('buildInitializationSettings', () => {
         expect(buildInitializationSettings(settings({ numThreads: -1 })).numThreads).toBeUndefined();
     });
 
+    it('forwards a numThreads the settings enum does not offer', () => {
+        // package.json offers 0 and 3..11, but the enum is advice: a
+        // hand-edited settings.json can hold anything. The value is sent as it
+        // stands rather than being second-guessed here, because the server owns
+        // the bounds — it clamps 1, 2 and anything above its maximum, and says
+        // in its initialize log what it did and why. Clamping here as well
+        // would put the same two numbers in two repositories and hide the
+        // explanation from the person who needs it.
+        expect(buildInitializationSettings(settings({ numThreads: 2 })).numThreads).toBe(2);
+        expect(buildInitializationSettings(settings({ numThreads: 64 })).numThreads).toBe(64);
+    });
+
     it('sends the interpreter path only when one is set', () => {
         expect(buildInitializationSettings(settings({ interpreter: '/usr/bin/python' })).pythonInterpreter).toBe(
             '/usr/bin/python'

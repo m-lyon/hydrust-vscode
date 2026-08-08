@@ -5,6 +5,7 @@ import { startServer, stopServer } from './common/server';
 import { getExtensionSettings, checkIfConfigurationChanged } from './common/settings';
 import { getProjectRoot, registerCommand, onDidChangeConfiguration } from './common/vscodeapi';
 import { CompatReporter } from './common/compat';
+import { createRunQueue } from './common/runQueue';
 
 let lsClient: LanguageClient | undefined;
 
@@ -53,43 +54,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // and the "Show server info" command survive restarts.
     const compatReporter = new CompatReporter(serverId);
 
-    // Server startup function — serialized so concurrent triggers don't overlap.
-    // At most one start runs at a time and at most one waits behind it; any
-    // further request while one is already waiting joins that same queued start.
-    let activeRun: Promise<void> | undefined;
-    let queuedRun: Promise<void> | undefined;
-
-    // Chain one start onto `previous`, keeping the two variables above honest as
-    // it moves from queued, to running, to finished. The queue slot is freed at
-    // the moment the start actually begins rather than when it ends, so a
-    // request arriving mid-run queues behind it instead of running alongside it.
-    const chainRunServer = (previous: Promise<void>): Promise<void> => {
-        const run: Promise<void> = previous.then(() => {
-            if (queuedRun === run) {
-                queuedRun = undefined;
-            }
-            activeRun = run;
-            return doRunServer();
-        });
-        const clear = () => {
-            if (activeRun === run) {
-                activeRun = undefined;
-            }
-        };
-        void run.then(clear, clear);
-        return run;
-    };
-
-    const runServer = (): Promise<void> => {
-        if (activeRun) {
-            if (!queuedRun) {
-                queuedRun = chainRunServer(activeRun.catch(() => undefined));
-            }
-            return queuedRun;
-        }
-        activeRun = chainRunServer(Promise.resolve());
-        return activeRun;
-    };
+    // Server startup, serialized so concurrent triggers don't overlap and leave
+    // a language client behind that nothing holds on to. See createRunQueue.
+    const runServer = createRunQueue(() => doRunServer());
 
     const doRunServer = async () => {
         try {

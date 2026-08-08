@@ -36,12 +36,15 @@ export interface InspectResult {
     workspaceFolderLanguageValue?: unknown;
 }
 
-/** A status bar item, with its properties left readable for assertions. */
+/**
+ * A status bar item, with its properties left readable for assertions.
+ *
+ * Nothing under src/ creates one today, and the tests assert exactly that: the
+ * compatibility layer reports through the log and `when` clause contexts, never
+ * by putting something permanent in front of the user.
+ */
 export class StubStatusBarItem {
     text = '';
-    tooltip: unknown = undefined;
-    command: string | undefined = undefined;
-    backgroundColor: unknown = undefined;
     alignment: number;
     priority: number | undefined;
     visible = false;
@@ -81,15 +84,6 @@ export interface VscodeStubState {
     configInspect: Map<string, InspectResult>;
     /** Every `getConfiguration` call, as `section` plus the resource path. */
     configurationRequests: { section: string | undefined; resource: string | undefined }[];
-    /**
-     * What `showWarningMessage` resolves to. Set to a never-resolving promise
-     * to stand in for a notification the user has not answered yet.
-     */
-    warningResponse: Promise<string | undefined>;
-    /** The editor `window.activeTextEditor` reports, if any. */
-    activeTextEditor: { document: { languageId: string } } | undefined;
-    /** Listeners registered through `window.onDidChangeActiveTextEditor`. */
-    activeEditorListeners: (() => void)[];
 }
 
 /** Live stub state. Replaced wholesale by `resetVscodeStub`. */
@@ -104,9 +98,6 @@ function freshState(): VscodeStubState {
         logs: [],
         configInspect: new Map<string, InspectResult>(),
         configurationRequests: [],
-        warningResponse: Promise.resolve(undefined),
-        activeTextEditor: undefined,
-        activeEditorListeners: [],
     };
 }
 
@@ -159,22 +150,6 @@ const outputChannel = {
 
 export const StatusBarAlignment = { Left: 1, Right: 2 };
 
-export class MarkdownString {
-    isTrusted = false;
-    supportHtml = false;
-
-    constructor(public value = '') {}
-
-    appendMarkdown(value: string): MarkdownString {
-        this.value += value;
-        return this;
-    }
-}
-
-export class ThemeColor {
-    constructor(public readonly id: string) {}
-}
-
 export class Uri {
     private constructor(readonly scheme: string, readonly fsPath: string) {}
 
@@ -191,32 +166,7 @@ export class Uri {
     }
 }
 
-export class EventEmitter<T> {
-    private listeners: ((value: T) => void)[] = [];
-
-    readonly event = (listener: (value: T) => void) => {
-        this.listeners.push(listener);
-        return new StubDisposable(() => {
-            this.listeners = this.listeners.filter((entry) => entry !== listener);
-        });
-    };
-
-    fire(value: T): void {
-        for (const listener of [...this.listeners]) {
-            listener(value);
-        }
-    }
-
-    dispose(): void {
-        this.listeners = [];
-    }
-}
-
 export const window = {
-    get activeTextEditor() {
-        return stub.activeTextEditor;
-    },
-
     createOutputChannel: () => outputChannel,
 
     createStatusBarItem: (alignment: number, priority?: number) => {
@@ -225,17 +175,9 @@ export const window = {
         return item;
     },
 
-    /**
-     * Kept because the task description names it. VS Code has no such API, so
-     * this simply points at the most recently created item.
-     */
-    setStatusBarItem: (item: StubStatusBarItem) => {
-        stub.statusBarItems.push(item);
-    },
-
     showWarningMessage: (message: string, ...items: string[]) => {
         stub.messages.push({ kind: 'warning', message, items });
-        return stub.warningResponse;
+        return Promise.resolve(undefined);
     },
 
     showInformationMessage: (message: string, ...items: string[]) => {
@@ -246,13 +188,6 @@ export const window = {
     showErrorMessage: (message: string, ...items: string[]) => {
         stub.messages.push({ kind: 'error', message, items });
         return Promise.resolve(undefined);
-    },
-
-    onDidChangeActiveTextEditor: (listener: () => void) => {
-        stub.activeEditorListeners.push(listener);
-        return new StubDisposable(() => {
-            stub.activeEditorListeners = stub.activeEditorListeners.filter((entry) => entry !== listener);
-        });
     },
 };
 

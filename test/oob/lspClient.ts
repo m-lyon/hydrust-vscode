@@ -8,6 +8,7 @@
  */
 
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
+import { pathToFileURL } from 'node:url';
 
 /** Everything the caller can steer about the handshake. */
 export interface HandshakeOptions {
@@ -37,7 +38,7 @@ function drain(buffer: Buffer<ArrayBuffer>): { messages: unknown[]; rest: Buffer
     const messages: unknown[] = [];
     let rest: Buffer<ArrayBuffer> = buffer;
 
-    for (;;) {
+    for (; ;) {
         const separator = rest.indexOf('\r\n\r\n');
         if (separator === -1) {
             break;
@@ -146,7 +147,7 @@ export async function initializeHandshake(options: HandshakeOptions): Promise<Ha
                     method: 'initialize',
                     params: {
                         processId: process.pid,
-                        rootUri: `file://${options.rootPath}`,
+                        rootUri: pathToFileURL(options.rootPath).href,
                         capabilities: options.capabilities,
                         clientInfo: { name: 'hydrust-contract-test', version: '0.0.0' },
                     },

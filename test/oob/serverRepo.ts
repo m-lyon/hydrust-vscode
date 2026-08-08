@@ -49,16 +49,49 @@ export function git(args: string[]): string {
     return execFileSync('git', ['-C', requireServerRepo(), ...args], {
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
+        // Capture stderr rather than letting it through to the terminal: the
+        // helpers below fold it into the error they throw.
+        stdio: ['ignore', 'pipe', 'pipe'],
     });
 }
 
-/** Run a git command that is allowed to find nothing, e.g. `git grep`. */
-export function gitMayFail(args: string[]): { ok: boolean; output: string } {
+/** What execFileSync attaches to the error when a command exits non-zero. */
+interface GitFailure {
+    status?: number;
+    stdout?: string;
+    stderr?: string;
+}
+
+/** Turn a git failure into an error that says what went wrong. */
+function gitError(args: string[], err: GitFailure): Error {
+    const stderr = (err.stderr ?? '').trim();
+    return new Error(
+        `git ${args.join(' ')} failed with exit code ${err.status ?? 'unknown'}` +
+        (stderr ? `:\n${stderr}` : '')
+    );
+}
+
+/**
+ * Run a git command that is allowed to find nothing, e.g. `git grep`.
+ *
+ * Only the exit codes in `expectedFailures` count as "found nothing" — git uses
+ * 1 for that and 128 for a real problem, such as a tag that does not exist or a
+ * checkout too shallow to hold the commit. Those are rethrown, because a
+ * broken checkout that reads as "no match" turns the audit suite's conclusions
+ * into confident nonsense.
+ */
+export function gitMayFail(
+    args: string[],
+    expectedFailures: number[] = [1]
+): { ok: boolean; output: string } {
     try {
         return { ok: true, output: git(args) };
     } catch (err) {
-        const output = (err as { stdout?: string }).stdout ?? '';
-        return { ok: false, output };
+        const failure = err as GitFailure;
+        if (failure.status !== undefined && expectedFailures.includes(failure.status)) {
+            return { ok: false, output: failure.stdout ?? '' };
+        }
+        throw gitError(args, failure);
     }
 }
 
@@ -84,10 +117,26 @@ export function tagAtLeast(tag: string, minimum: string): boolean {
     return compareTags(tag, minimum) >= 0;
 }
 
-/** Read a file as it was at a tag. Returns undefined when it did not exist. */
+/**
+ * Read a file as it was at a tag. Returns undefined when it did not exist.
+ *
+ * `git show` reports both "no such path" and "no such tag" as exit code 128, so
+ * the two are told apart by what git says: only the missing path is a real
+ * answer, and a tag git cannot resolve is a broken checkout that should stop
+ * the suite.
+ */
 export function fileAtTag(tag: string, filePath: string): string | undefined {
-    const result = gitMayFail(['show', `${tag}:${filePath}`]);
-    return result.ok ? result.output : undefined;
+    const args = ['show', `${tag}:${filePath}`];
+    try {
+        return git(args);
+    } catch (err) {
+        const failure = err as GitFailure;
+        const stderr = failure.stderr ?? '';
+        if (/does not exist in|exists on disk, but not in/.test(stderr)) {
+            return undefined;
+        }
+        throw gitError(args, failure);
+    }
 }
 
 /** Read a file from the server working tree, i.e. the unreleased branch. */
