@@ -8,7 +8,6 @@ export interface ExtensionSettings {
     interpreter: string;
     importStrategy: 'fromEnvironment' | 'useBundled';
     serverVersion: string;
-    logLevel: 'debug' | 'info' | 'warn' | 'error';
     traceServer: 'off' | 'messages' | 'verbose';
     disabledRules: string[];
     enableHover: boolean;
@@ -17,6 +16,7 @@ export interface ExtensionSettings {
     enableGotoDefinition: boolean;
     enableSemanticTokens: boolean;
     enableDiagnostics: boolean;
+    numThreads: number;
     developerMode: boolean;
 }
 
@@ -41,7 +41,6 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
         interpreter: config.get<string>('pythonInterpreterPath', ''),
         importStrategy: config.get<'fromEnvironment' | 'useBundled'>('importStrategy', 'fromEnvironment'),
         serverVersion: config.get<string>('serverVersion', 'latest'),
-        logLevel: config.get<'debug' | 'info' | 'warn' | 'error'>('logLevel', 'info'),
         traceServer: config.get<'off' | 'messages' | 'verbose'>('traceServer', 'off'),
         disabledRules: config.get<string[]>('disabledRules', []),
         enableHover: config.get<boolean>('enableHover', true),
@@ -50,6 +49,7 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
         enableGotoDefinition: config.get<boolean>('enableGotoDefinition', true),
         enableSemanticTokens: config.get<boolean>('enableSemanticTokens', true),
         enableDiagnostics: config.get<boolean>('enableDiagnostics', true),
+        numThreads: config.get<number>('numThreads', 0),
         developerMode: config.get<boolean>('developerMode', false),
     };
 }
@@ -59,10 +59,10 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
  */
 export function checkIfConfigurationChanged(e: vscode.ConfigurationChangeEvent, serverId: string): boolean {
     const sections = [
-        'serverPath', 'pythonInterpreterPath', 'importStrategy', 'serverVersion', 'logLevel', 'traceServer', 'disabledRules',
+        'serverPath', 'pythonInterpreterPath', 'importStrategy', 'serverVersion', 'traceServer', 'disabledRules',
         'enableHover', 'enableCompletion', 'enableSignatureHelp',
         'enableGotoDefinition', 'enableSemanticTokens', 'enableDiagnostics',
-        'developerMode',
+        'numThreads', 'developerMode',
     ];
     return sections.some((section) => e.affectsConfiguration(`${serverId}.${section}`));
 }

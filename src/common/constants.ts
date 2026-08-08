@@ -86,9 +86,19 @@ export function getArchiveDirectoryName(platformInfo: PlatformInfo): string {
 }
 
 /**
+ * The only part of the extension context these path helpers need.
+ *
+ * Declared here rather than importing vscode, so this file stays free of any
+ * dependency on the extension host.
+ */
+export interface ExtensionPaths {
+    extensionPath: string;
+}
+
+/**
  * Get the expected executable path for a specific version
  */
-export function getExecutablePath(context: any, version: string): string {
+export function getExecutablePath(context: ExtensionPaths, version: string): string {
     const platformInfo = getPlatformInfo();
     const versionedDir = getVersionedDir(context, version);
     const archiveDirName = getArchiveDirectoryName(platformInfo);
@@ -99,14 +109,14 @@ export function getExecutablePath(context: any, version: string): string {
  * Get the root directory that holds all per-version subdirectories of the
  * bundled server.
  */
-export function getLibsRoot(context: any): string {
+export function getLibsRoot(context: ExtensionPaths): string {
     return path.join(context.extensionPath, 'bundled', 'libs');
 }
 
 /**
  * Get the versioned directory path for a specific version
  */
-export function getVersionedDir(context: any, version: string): string {
+export function getVersionedDir(context: ExtensionPaths, version: string): string {
     // Normalize version (remove 'v' prefix for directory name)
     const normalizedVersion = version.startsWith('v') ? version.slice(1) : version;
     return path.join(getLibsRoot(context), normalizedVersion);

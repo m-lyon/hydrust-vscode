@@ -46,7 +46,7 @@ db:
   host: localhost  # hydrust: ignore[unknown-argument]
 ```
 
-Available rules: `missing-argument`, `unknown-argument`, `unresolved-reference`, `unresolved-import`, `invalid-hydra-parameter`.
+Available rules: `missing-argument`, `unknown-argument`, `unresolved-reference`, `unresolved-import`, `invalid-hydra-parameter`, `parameter-already-assigned`, `too-many-positional-arguments`.
 
 ### Signature Help
 
