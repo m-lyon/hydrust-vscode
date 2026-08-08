@@ -49,11 +49,16 @@ export function createRunQueue(job: () => Promise<void>): () => Promise<void> {
     };
 
     return (): Promise<void> => {
+        // Both slots have to be checked. A run that has settled frees
+        // `activeRun` a couple of microtasks before the queued run claims it,
+        // and a request arriving in that gap would otherwise see an empty
+        // `activeRun` and start a second run alongside the queued one.
+        if (queuedRun) {
+            return queuedRun;
+        }
         if (activeRun) {
-            if (!queuedRun) {
-                // The catch keeps a failed run from cancelling the next one.
-                queuedRun = chain(activeRun.catch(() => undefined));
-            }
+            // The catch keeps a failed run from cancelling the next one.
+            queuedRun = chain(activeRun.catch(() => undefined));
             return queuedRun;
         }
         activeRun = chain(Promise.resolve());

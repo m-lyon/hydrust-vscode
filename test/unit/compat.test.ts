@@ -383,6 +383,54 @@ describe('afterLaunch writing the real version back to the cache', () => {
         });
     });
 
+    it('warns about a renamed rule the first launch could not rewrite', async () => {
+        // The payload is built from the pre-launch guess, and there is no guess
+        // for a v0.2.0 binary: it has no --version flag, so the probe times out.
+        // The rule is therefore sent under its modern name, which that server
+        // drops. Reporting it as handled because the version is known by the
+        // time the report is rebuilt would hide a rule that is doing nothing.
+        const file = writeUnrunnableFile('silent-server');
+
+        const compat = await ServerCompat.beforeLaunch(
+            binary(file),
+            SERVER_ID,
+            ['invalid-hydra-parameter'],
+            undefined,
+            asExtensionContext(context)
+        );
+        expect(compat.transformSettings({ disabledRules: ['invalid-hydra-parameter'] })).toEqual({
+            disabledRules: ['invalid-hydra-parameter'],
+        });
+
+        await compat.afterLaunch(initializeResult({ version: '0.2.0' }), asExtensionContext(context));
+
+        expect(compat.unsupportedRules.map((entry) => entry.name)).toEqual(['invalid-hydra-parameter']);
+        expect(compat.unsupportedRules[0].reason).toContain('invalid-target');
+        expect(compat.unsupportedRules[0].reason).toContain('Restarting');
+    });
+
+    it('stays quiet about a renamed rule that really was rewritten', async () => {
+        // Same server, but its version was remembered from an earlier launch,
+        // so the payload went out under the old name and the rule is in force.
+        const file = writeUnrunnableFile('silent-server');
+        stub.globalState.set(PROBE_CACHE_KEY, { [fingerprintOf(file)]: 'v0.2.0' });
+
+        const compat = await ServerCompat.beforeLaunch(
+            binary(file),
+            SERVER_ID,
+            ['invalid-hydra-parameter'],
+            undefined,
+            asExtensionContext(context)
+        );
+        expect(compat.transformSettings({ disabledRules: ['invalid-hydra-parameter'] })).toEqual({
+            disabledRules: ['invalid-target'],
+        });
+
+        await compat.afterLaunch(initializeResult({ version: '0.2.0' }), asExtensionContext(context));
+
+        expect(compat.unsupportedRules).toEqual([]);
+    });
+
     it('overwrites a remembered version that turned out to be wrong', async () => {
         const file = writeUnrunnableFile('silent-server');
         const fingerprint = fingerprintOf(file);
@@ -708,6 +756,62 @@ describe('the setContext keys', () => {
         const contexts = recordedContexts();
         expect(contexts.get('hydrust.supports.pullDiagnostics')).toBe(false);
         expect(contexts.get('hydrust.supports.inlayHints')).toBe(false);
+    });
+});
+
+describe('the "Show server info" command', () => {
+    it('says the server is not running when there is nothing to describe', async () => {
+        const reporter = makeReporter();
+
+        reporter.showDetails();
+
+        expect(stub.messages).toEqual([
+            { kind: 'information', message: 'Hydrust: the language server is not running.', items: [] },
+        ]);
+    });
+
+    it('says so too after a start failed and cleared the reporter', async () => {
+        const file = writeUnrunnableFile('silent-server');
+        const compat = await ServerCompat.beforeLaunch(
+            binary(file),
+            SERVER_ID,
+            [],
+            undefined,
+            asExtensionContext(context)
+        );
+        const reporter = makeReporter();
+        await reporter.update(compat);
+        await reporter.update(undefined);
+
+        reporter.showDetails();
+
+        expect(stub.messages.map((entry) => entry.kind)).toEqual(['information']);
+    });
+
+    it('writes the full description to the log when a server is running', async () => {
+        configure(settingChanged('numThreads', 0, 8));
+        const file = writeUnrunnableFile('silent-server');
+        const compat = await ServerCompat.beforeLaunch(
+            binary(file, { source: 'serverPath' }),
+            SERVER_ID,
+            ['not-a-rule'],
+            undefined,
+            asExtensionContext(context)
+        );
+        await compat.afterLaunch(initializeResult({ version: '0.3.0' }), asExtensionContext(context));
+
+        const reporter = makeReporter();
+        await reporter.update(compat);
+        stub.logs.length = 0;
+        reporter.showDetails();
+
+        const logged = stub.logs.join('\n');
+        expect(logged).toContain('Hydrust server details:');
+        for (const line of compat.describe()) {
+            expect(logged).toContain(line);
+        }
+        // Revealing the log channel is the whole notification; nothing pops up.
+        expect(stub.messages).toEqual([]);
     });
 });
 

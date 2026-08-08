@@ -11,6 +11,7 @@ import {
     FEATURE_COMPAT,
     HydrustCapabilities,
     MINIMUM_SERVER_VERSION,
+    RuleRewrite,
     SETTING_COMPAT,
     ServerSource,
     ServerVersion,
@@ -263,6 +264,15 @@ export class ServerCompat {
     private version: ServerVersion | undefined;
     private capabilities: HydrustCapabilities | undefined;
     private report: CompatReport;
+    /**
+     * Renames actually made to the payload that was sent.
+     *
+     * The payload is built from the pre-launch version guess, but the report is
+     * rebuilt from the version the server reports. Without this, a rule that
+     * needed renaming for an old server but was sent unchanged because the
+     * guess was missing would look handled when it was not.
+     */
+    private appliedRewrites: RuleRewrite[] = [];
 
     private constructor(
         readonly binary: ResolvedBinary,
@@ -327,9 +337,14 @@ export class ServerCompat {
      *
      * Currently this only renames diagnostic rules that the target server spells
      * differently. Nothing is changed when the version is unknown.
+     *
+     * The renames that were made are kept, because they are the only record of
+     * what the server was really sent once the version turns out to be
+     * something other than the pre-launch guess.
      */
     transformSettings(payload: Record<string, unknown>): Record<string, unknown> {
         const { payload: next, rewrites, droppedRules } = transformSettingsPayload(payload, this.version);
+        this.appliedRewrites = rewrites;
         for (const dropped of droppedRules) {
             logger.warn(
                 `Ignoring ${this.serverId}.disabledRules entry ${JSON.stringify(dropped)}: ` +
@@ -393,6 +408,7 @@ export class ServerCompat {
             capabilities: this.capabilities,
             configuredSettings: this.configuredSettings,
             configuredRules: this.configuredRules,
+            appliedRuleRewrites: this.appliedRewrites,
             pullDiagnosticsAdvertised: advertisesPullDiagnostics(initializeResult),
         });
 

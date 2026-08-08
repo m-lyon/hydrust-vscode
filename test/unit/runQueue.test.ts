@@ -9,9 +9,13 @@ import { createRunQueue } from '../../src/common/runQueue';
 function controllableJob() {
     const settle: { resolve: () => void; reject: (err: Error) => void }[] = [];
     let started = 0;
+    let active = 0;
+    let peak = 0;
 
     const job = (): Promise<void> => {
         started += 1;
+        active += 1;
+        peak = Math.max(peak, active);
         return new Promise<void>((resolve, reject) => {
             settle.push({ resolve, reject });
         });
@@ -21,10 +25,18 @@ function controllableJob() {
         job,
         /** How many times the job has actually been entered. */
         starts: () => started,
+        /** The most runs that were ever inside the job at the same time. */
+        peakOverlap: () => peak,
         /** Finish the nth run, counting from zero. */
-        finish: (index: number) => settle[index].resolve(),
+        finish: (index: number) => {
+            active -= 1;
+            settle[index].resolve();
+        },
         /** Fail the nth run. */
-        fail: (index: number, message = 'boom') => settle[index].reject(new Error(message)),
+        fail: (index: number, message = 'boom') => {
+            active -= 1;
+            settle[index].reject(new Error(message));
+        },
     };
 }
 
@@ -118,6 +130,31 @@ describe('createRunQueue', () => {
         worker.finish(2);
         await expect(first).resolves.toBeUndefined();
         await expect(third).resolves.toBeUndefined();
+    });
+
+    it('never overlaps two runs, whenever the next request lands', async () => {
+        // A finished run frees its slot a few microtasks before the queued run
+        // takes it over. A request arriving in that window used to see nothing
+        // running and start straight away, so two jobs ran side by side — the
+        // exact thing this module exists to prevent. The window is only a
+        // handful of microtasks wide, so the request is tried at each offset.
+        for (let ticks = 0; ticks <= 6; ticks += 1) {
+            const worker = controllableJob();
+            const run = createRunQueue(worker.job);
+
+            run();
+            await flush();
+            run();
+
+            worker.finish(0);
+            for (let tick = 0; tick < ticks; tick += 1) {
+                await Promise.resolve();
+            }
+            run();
+            await flush();
+
+            expect(worker.peakOverlap(), `request made ${ticks} microtasks after the first run finished`).toBe(1);
+        }
     });
 
     it('still runs the queued request when the one before it fails', async () => {

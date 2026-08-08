@@ -224,16 +224,31 @@ describe('buildCompatReport in fallback mode', () => {
         expect(report.unsupportedRules[0].reason).toContain('added in hydra-lsp v0.3.0');
     });
 
-    it('stays quiet about a renamed rule that gets rewritten instead', () => {
+    it('stays quiet about a renamed rule that was rewritten instead', () => {
+        const report = buildCompatReport({
+            version: v(0, 2, 0),
+            configuredSettings: ['disabledRules'],
+            configuredRules: ['invalid-hydra-parameter'],
+            appliedRuleRewrites: [{ from: 'invalid-hydra-parameter', to: 'invalid-target' }],
+        });
+
+        // v0.2.0 spells it 'invalid-target' and that is what was sent, so there
+        // is nothing for the user to fix.
+        expect(report.unsupportedRules).toEqual([]);
+    });
+
+    it('reports a renamed rule that was not rewritten after all', () => {
+        // The payload is built before the server names its version, so a rule
+        // that needed renaming can still go out under the modern name. Knowing
+        // the version now does not undo that.
         const report = buildCompatReport({
             version: v(0, 2, 0),
             configuredSettings: ['disabledRules'],
             configuredRules: ['invalid-hydra-parameter'],
         });
 
-        // v0.2.0 spells it 'invalid-target' and transformDisabledRules sends it
-        // that way, so there is nothing for the user to fix.
-        expect(report.unsupportedRules).toEqual([]);
+        expect(report.unsupportedRules.map((entry) => entry.name)).toEqual(['invalid-hydra-parameter']);
+        expect(report.unsupportedRules[0].reason).toContain("calls this rule 'invalid-target'");
     });
 
     it('flags a rule code no server has ever accepted', () => {

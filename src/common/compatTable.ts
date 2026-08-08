@@ -400,6 +400,15 @@ export interface CompatInput {
     configuredSettings: string[];
     /** Rule codes the user put in hydrust.disabledRules. */
     configuredRules: string[];
+    /**
+     * Renames that were really applied to the payload that was sent.
+     *
+     * A renamed rule only reaches an old server if the payload was rewritten,
+     * and the payload is built before the server has said which version it is.
+     * When the pre-launch guess was wrong, or there was no guess at all, no
+     * rewrite happened and the user still needs telling.
+     */
+    appliedRuleRewrites?: readonly RuleRewrite[];
     /** True when pull diagnostics were seen in the standard capability field. */
     pullDiagnosticsAdvertised?: boolean;
 }
@@ -455,6 +464,8 @@ export function buildCompatReport(input: CompatInput): CompatReport {
     // listing each individual rule as well; the one line covers it.
     const disabledRulesIgnored = unsupportedSettings.some((entry) => entry.name === 'disabledRules');
 
+    const rewrittenCodes = new Set((input.appliedRuleRewrites ?? []).map((rewrite) => rewrite.from));
+
     const unsupportedRules: UnsupportedEntry[] = [];
     for (const code of disabledRulesIgnored ? [] : input.configuredRules) {
         if (authoritative) {
@@ -479,8 +490,18 @@ export function buildCompatReport(input: CompatInput): CompatReport {
             continue;
         }
         if (entry.previousCode && entry.previousCodeSince && isAtLeast(effectiveVersion, entry.previousCodeSince)) {
-            // Handled by rewriting the payload instead, so it is not a problem
-            // the user has to hear about.
+            if (rewrittenCodes.has(code)) {
+                // The payload really was sent with the older spelling, so the
+                // rule is switched off and there is nothing to report.
+                continue;
+            }
+            unsupportedRules.push({
+                name: code,
+                reason:
+                    `${BINARY_NAME} ${versionLabel} calls this rule '${entry.previousCode}', and the ` +
+                    'version was not known in time to send it under that name. Restarting the server ' +
+                    'will fix it.',
+            });
             continue;
         }
         unsupportedRules.push({

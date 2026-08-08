@@ -10,6 +10,19 @@ import { createRunQueue } from './common/runQueue';
 let lsClient: LanguageClient | undefined;
 
 /**
+ * The most recently requested server run, so `deactivate` can wait for it.
+ *
+ * A run clears `lsClient` at the start and only sets it again at the end, so a
+ * deactivation landing in between would stop nothing and leave the client the
+ * run went on to create with no owner. Runs settle in the order they were
+ * requested, so waiting on the last one waits for all of them.
+ */
+let pendingRun: Promise<void> | undefined;
+
+/** Set once `deactivate` starts, so a run in flight does not outlive it. */
+let deactivating = false;
+
+/**
  * Server information
  */
 interface ServerInfo {
@@ -31,6 +44,11 @@ function loadServerDefaults(): ServerInfo {
  * Extension activation
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    // Both outlive a single activation, so start from a clean slate in case the
+    // extension is activated again without the module being reloaded.
+    deactivating = false;
+    pendingRun = undefined;
+
     const serverInfo = loadServerDefaults();
     const serverName = serverInfo.name;
     const serverId = serverInfo.module;
@@ -56,9 +74,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Server startup, serialized so concurrent triggers don't overlap and leave
     // a language client behind that nothing holds on to. See createRunQueue.
-    const runServer = createRunQueue(() => doRunServer());
+    const queueServerRun = createRunQueue(() => doRunServer());
+    const runServer = (): Promise<void> => {
+        pendingRun = queueServerRun();
+        return pendingRun;
+    };
 
     const doRunServer = async () => {
+        if (deactivating) {
+            return;
+        }
         try {
             if (lsClient) {
                 await stopServer(lsClient);
@@ -91,6 +116,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 projectRoot
             );
             lsClient = started.client;
+
+            if (deactivating) {
+                // Deactivation happened while this start was in flight, after
+                // it was too late to bail out. Stop what was just created
+                // rather than leaving it running with nobody to stop it.
+                await stopServer(lsClient);
+                lsClient = undefined;
+                return;
+            }
 
             // Set up client event handlers
             lsClient.onDidChangeState((event) => {
@@ -162,6 +196,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  */
 export async function deactivate(): Promise<void> {
     logger.info('Deactivating Hydrust extension...');
+    deactivating = true;
+    // Let any start in flight finish first. Until it does, `lsClient` says
+    // nothing useful: a restart clears it before stopping and only sets it
+    // again once the new client is up.
+    if (pendingRun) {
+        await pendingRun.catch(() => undefined);
+        pendingRun = undefined;
+    }
     if (lsClient) {
         await stopServer(lsClient);
         lsClient = undefined;
