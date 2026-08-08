@@ -145,11 +145,14 @@ async function probeBinaryVersion(
         const cached = cache[fingerprint];
         if (cached === null) {
             logger.debug(`Version of ${binaryPath} is still unknown (remembered from an earlier check).`);
+            // Rewrite it so using a binary keeps it alive in the cache.
+            await rememberVersion(context, fingerprint, undefined);
             return undefined;
         }
         const parsed = parseServerVersion(cached);
         if (parsed) {
             logger.debug(`Version of ${binaryPath} is ${formatServerVersion(parsed)} (remembered).`);
+            await rememberVersion(context, fingerprint, parsed);
             return parsed;
         }
     }
@@ -170,8 +173,10 @@ async function probeBinaryVersion(
  *
  * The fingerprint changes every time the binary is replaced, so without a cap
  * the cache would collect one dead entry per upgrade and keep it for the life
- * of the install. Entries are rewritten in order with the newest last, and
- * anything past the cap falls off the front.
+ * of the install. Entries are rewritten in order with the one just used last,
+ * and anything past the cap falls off the front. Reads call this too, so the
+ * binary that falls off is the one left untouched the longest rather than the
+ * one written the longest ago.
  */
 async function rememberVersion(
     context: vscode.ExtensionContext,

@@ -148,6 +148,8 @@ describe('the capability block the server really sends', () => {
         // Not a failure of the server, but it does mean the extension is
         // leaving something on the table, so it is worth surfacing.
         const block = blockFrom(fullResult);
+        expect(block.supportedSettings).toBeDefined();
+
         const known = new Set(SETTING_COMPAT.map((setting) => setting.key));
         const extra = block.supportedSettings!.filter((key) => !known.has(key));
 
@@ -160,6 +162,8 @@ describe('the capability block the server really sends', () => {
 
     it('accepts no rule code the extension never offers', () => {
         const block = blockFrom(fullResult);
+        expect(block.supportedRules).toBeDefined();
+
         const known = new Set(RULE_COMPAT.map((rule) => rule.code));
         const extra = block.supportedRules!.filter((code) => !known.has(code));
 

@@ -295,6 +295,28 @@ describe('the probe cache', () => {
         expect(cache[fingerprintOf(file)]).toBeNull();
     });
 
+    it('keeps a binary that is still in use out of the way of the cap', async () => {
+        // The daily driver is the oldest entry by write time, so a cache that
+        // only reordered on writes would drop it and re-probe on the next
+        // launch. Reading it has to count as using it.
+        const file = writeUnrunnableFile('opaque-server');
+        const seeded: Record<string, string | null> = { [fingerprintOf(file)]: 'v0.3.0' };
+        for (let index = 0; index < PROBE_CACHE_LIMIT - 1; index += 1) {
+            seeded[`/old/binary-${index}|1|2`] = 'v0.1.0';
+        }
+        stub.globalState.set(PROBE_CACHE_KEY, seeded);
+
+        // Use the old binary, then fill the last free slot with a new one.
+        await ServerCompat.beforeLaunch(binary(file), SERVER_ID, [], undefined, asExtensionContext(context));
+        const newcomer = writeUnrunnableFile('newcomer-server');
+        await ServerCompat.beforeLaunch(binary(newcomer), SERVER_ID, [], undefined, asExtensionContext(context));
+
+        const cache = probeCache();
+        expect(Object.keys(cache)).toHaveLength(PROBE_CACHE_LIMIT);
+        expect(cache[fingerprintOf(file)]).toBe('v0.3.0');
+        expect(cache['/old/binary-0|1|2']).toBeUndefined();
+    });
+
     it('refreshes an existing entry rather than adding a second one', async () => {
         const file = writeUnrunnableFile('opaque-server');
         stub.globalState.set(PROBE_CACHE_KEY, { [fingerprintOf(file)]: 'corrupted' });
