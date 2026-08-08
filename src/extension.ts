@@ -7,7 +7,6 @@ import { getProjectRoot, registerCommand, onDidChangeConfiguration } from './com
 import { CompatReporter } from './common/compat';
 
 let lsClient: LanguageClient | undefined;
-let pendingRunServer: Promise<void> | undefined;
 
 /**
  * Server information
@@ -55,24 +54,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const compatReporter = new CompatReporter(serverId);
 
     // Server startup function — serialized so concurrent triggers don't overlap.
-    // If a restart is already running, each new request waits for the current one
-    // to finish before starting another (at most one queued restart at a time).
-    let nextRunServer: Promise<void> | undefined;
+    // At most one start runs at a time and at most one waits behind it; any
+    // further request while one is already waiting joins that same queued start.
+    let activeRun: Promise<void> | undefined;
+    let queuedRun: Promise<void> | undefined;
 
-    const runServer = async () => {
-        if (pendingRunServer) {
-            // Chain: wait for the running restart, then do one more.
-            if (!nextRunServer) {
-                nextRunServer = pendingRunServer.then(doRunServer, doRunServer).finally(() => {
-                    nextRunServer = undefined;
-                });
+    // Chain one start onto `previous`, keeping the two variables above honest as
+    // it moves from queued, to running, to finished. The queue slot is freed at
+    // the moment the start actually begins rather than when it ends, so a
+    // request arriving mid-run queues behind it instead of running alongside it.
+    const chainRunServer = (previous: Promise<void>): Promise<void> => {
+        const run: Promise<void> = previous.then(() => {
+            if (queuedRun === run) {
+                queuedRun = undefined;
             }
-            return nextRunServer;
-        }
-        pendingRunServer = doRunServer().finally(() => {
-            pendingRunServer = undefined;
+            activeRun = run;
+            return doRunServer();
         });
-        return pendingRunServer;
+        const clear = () => {
+            if (activeRun === run) {
+                activeRun = undefined;
+            }
+        };
+        void run.then(clear, clear);
+        return run;
+    };
+
+    const runServer = (): Promise<void> => {
+        if (activeRun) {
+            if (!queuedRun) {
+                queuedRun = chainRunServer(activeRun.catch(() => undefined));
+            }
+            return queuedRun;
+        }
+        activeRun = chainRunServer(Promise.resolve());
+        return activeRun;
     };
 
     const doRunServer = async () => {
