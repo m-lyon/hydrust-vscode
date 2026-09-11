@@ -1,5 +1,5 @@
 /**
- * Boot the real hydra-lsp binary and check the extension reads it correctly.
+ * Boot the real server binary and check the extension reads it correctly.
  *
  * The compatibility layer's whole job is to understand what the server says
  * about itself. The unit tests exercise it against handwritten payloads, which
@@ -38,23 +38,40 @@ import {
 import { ALL_CAPABILITIES, NO_CAPABILITIES, initializeHandshake } from './lspClient';
 import { REPO_ROOT } from './serverRepo';
 
-/** Where to find the server binary, and a clear complaint when it is missing. */
-function requireBinary(): string {
+/**
+ * Where to find the server binary, and a clear complaint when it is missing.
+ *
+ * Either name is accepted, since this suite runs against whatever is in the
+ * server checkout's target directory and the rename lands there before it
+ * lands in a release. A `hydrust` needs the `server` subcommand to speak LSP;
+ * a `hydra-lsp` predates it and takes no arguments.
+ *
+ * `hydra-lsp` is preferred while both exist, because until the two binaries
+ * are merged `cargo build` produces both and only `hydra-lsp` is the language
+ * server — a `hydrust` next to it is the CLI, which exits 2 on `server`. Once
+ * the merge lands nothing builds a `hydra-lsp` any more, so this order has to
+ * flip; a leftover one in target/debug would otherwise be picked up silently.
+ */
+function requireBinary(): { path: string; args: string[] } {
+    const targetDir = path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug');
     const candidates = process.env.HYDRA_LSP_BINARY
         ? [path.resolve(process.env.HYDRA_LSP_BINARY)]
         : [
-            path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug', 'hydra-lsp'),
-            path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug', 'hydra-lsp.exe'),
+            path.join(targetDir, 'hydra-lsp'),
+            path.join(targetDir, 'hydra-lsp.exe'),
+            path.join(targetDir, 'hydrust'),
+            path.join(targetDir, 'hydrust.exe'),
         ];
 
     for (const candidate of candidates) {
         if (fs.existsSync(candidate)) {
-            return candidate;
+            const isUnified = path.basename(candidate, path.extname(candidate)) === 'hydrust';
+            return { path: candidate, args: isUnified ? ['server'] : [] };
         }
     }
 
     throw new Error(
-        'No hydra-lsp binary was found, so there is nothing to check the extension against.\n' +
+        'No server binary was found, so there is nothing to check the extension against.\n' +
         `Looked in:\n${candidates.map((entry) => `  ${entry}`).join('\n')}\n\n` +
         'Build the server first:\n' +
         '  cd ../hydra-lsp && cargo build\n' +
@@ -66,6 +83,7 @@ function requireBinary(): string {
 }
 
 let binaryPath: string;
+let serverArgs: string[];
 let workspace: string;
 
 /** The reply from a client that advertised everything. */
@@ -74,13 +92,25 @@ let fullResult: unknown;
 let bareResult: unknown;
 
 beforeAll(async () => {
-    binaryPath = requireBinary();
+    ({ path: binaryPath, args: serverArgs } = requireBinary());
     workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-contract-'));
 
-    fullResult = (await initializeHandshake({ binaryPath, capabilities: ALL_CAPABILITIES, rootPath: workspace }))
-        .initializeResult;
-    bareResult = (await initializeHandshake({ binaryPath, capabilities: NO_CAPABILITIES, rootPath: workspace }))
-        .initializeResult;
+    fullResult = (
+        await initializeHandshake({
+            binaryPath,
+            args: serverArgs,
+            capabilities: ALL_CAPABILITIES,
+            rootPath: workspace,
+        })
+    ).initializeResult;
+    bareResult = (
+        await initializeHandshake({
+            binaryPath,
+            args: serverArgs,
+            capabilities: NO_CAPABILITIES,
+            rootPath: workspace,
+        })
+    ).initializeResult;
 });
 
 afterAll(() => {
@@ -275,6 +305,7 @@ describe('feature negotiation', () => {
     it('turns on exactly the one behaviour a partly-capable client asked for', async () => {
         const { initializeResult } = await initializeHandshake({
             binaryPath,
+            args: serverArgs,
             rootPath: workspace,
             capabilities: {
                 workspace: { didChangeWatchedFiles: { dynamicRegistration: true } },
@@ -288,6 +319,7 @@ describe('feature negotiation', () => {
     it('does not offer refresh to a client that only does pull diagnostics', async () => {
         const { initializeResult } = await initializeHandshake({
             binaryPath,
+            args: serverArgs,
             rootPath: workspace,
             capabilities: { textDocument: { diagnostic: {} } },
         });

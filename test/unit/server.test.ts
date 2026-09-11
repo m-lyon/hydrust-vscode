@@ -174,6 +174,9 @@ describe('the payload handed to the language client', () => {
         expect(client.serverId).toBe(SERVER_ID);
         expect(client.serverName).toBe(SERVER_NAME);
         expect(client.serverOptions.run.command).toBe(binaryPath);
+        // The subcommand goes on unconditionally, even for a v0.4.0 server
+        // that predates it and simply ignores it.
+        expect(client.serverOptions.run.args).toEqual(['server']);
         expect(client.clientOptions.initializationOptions.settings).toEqual({
             pythonInterpreter: '/usr/bin/python3',
             disabledRules: [],

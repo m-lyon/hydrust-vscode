@@ -1,11 +1,20 @@
 import * as path from 'path';
 import * as os from 'os';
+import {
+    BINARY_NAME_CANDIDATES,
+    archiveName,
+    parseServerVersion,
+    serverExecutableName,
+} from './compatTable';
 
 /**
- * The base name of the server binary (without platform suffix or extension).
- * Change this single value to rename the binary everywhere.
+ * Names to try, in order, when looking for a server on PATH.
+ *
+ * Two entries where the server's own `find_hydrust_bin()` needs only
+ * `hydrust`, because the extension has to keep working with a `hydra-lsp` a
+ * user installed before the rename. The new name is preferred.
  */
-export const BINARY_NAME = 'hydra-lsp';
+export const PATH_CANDIDATES: readonly string[] = BINARY_NAME_CANDIDATES;
 
 /**
  * Platform information for binary downloads
@@ -15,12 +24,15 @@ export interface PlatformInfo {
     platform: string;
     /** The archive extension (tar.xz or zip) */
     archiveExt: string;
-    /** The executable name */
-    executableName: string;
+    /** What is appended to the executable's basename: '.exe', or nothing */
+    executableSuffix: string;
 }
 
 /**
  * Get platform-specific information for downloads
+ *
+ * Deliberately says nothing about what the binary is called: that depends on
+ * the server version, which this has no way of knowing.
  */
 export function getPlatformInfo(): PlatformInfo {
     const platform = process.platform;
@@ -28,12 +40,12 @@ export function getPlatformInfo(): PlatformInfo {
 
     let platformId: string;
     let archiveExt: string;
-    let executableName: string;
+    let executableSuffix: string;
 
     if (platform === 'win32') {
         platformId = 'x86_64-pc-windows-msvc';
         archiveExt = 'zip';
-        executableName = `${BINARY_NAME}.exe`;
+        executableSuffix = '.exe';
     } else if (platform === 'darwin') {
         if (arch === 'arm64') {
             platformId = 'aarch64-apple-darwin';
@@ -41,7 +53,7 @@ export function getPlatformInfo(): PlatformInfo {
             platformId = 'x86_64-apple-darwin';
         }
         archiveExt = 'tar.xz';
-        executableName = BINARY_NAME;
+        executableSuffix = '';
     } else if (platform === 'linux') {
         if (arch === 'arm64') {
             platformId = 'aarch64-unknown-linux-gnu';
@@ -50,7 +62,7 @@ export function getPlatformInfo(): PlatformInfo {
             platformId = 'x86_64-unknown-linux-gnu';
         }
         archiveExt = 'tar.xz';
-        executableName = BINARY_NAME;
+        executableSuffix = '';
     } else {
         throw new Error(`Unsupported platform: ${platform} ${arch}`);
     }
@@ -58,7 +70,7 @@ export function getPlatformInfo(): PlatformInfo {
     return {
         platform: platformId,
         archiveExt,
-        executableName,
+        executableSuffix,
     };
 }
 
@@ -66,7 +78,7 @@ export function getPlatformInfo(): PlatformInfo {
  * Get the download URL for a specific version and platform
  */
 export function getDownloadUrl(version: string, platformInfo: PlatformInfo): string {
-    const filename = `${getArchiveDirectoryName(platformInfo)}.${platformInfo.archiveExt}`;
+    const filename = getArchiveFileName(platformInfo, version);
     return `https://github.com/m-lyon/hydra-lsp/releases/download/${version}/${filename}`;
 }
 
@@ -78,11 +90,37 @@ export function getChecksumUrl(version: string, platformInfo: PlatformInfo): str
     return `${downloadUrl}.sha256`;
 }
 
+/** Build an archive directory name from an already-chosen basename. */
+function archiveDirectoryNameFor(baseName: string, platformInfo: PlatformInfo): string {
+    return `${baseName}-${platformInfo.platform}`;
+}
+
 /**
  * Get the archive directory name (the nested directory created when extracting)
+ *
+ * `version` is a release tag or a bundled directory name, with or without the
+ * 'v'. Anything unparseable is treated as a pre-rename version, which is what
+ * every name on disk today is.
  */
-export function getArchiveDirectoryName(platformInfo: PlatformInfo): string {
-    return `${BINARY_NAME}-${platformInfo.platform}`;
+export function getArchiveDirectoryName(platformInfo: PlatformInfo, version: string): string {
+    return archiveDirectoryNameFor(archiveName(parseServerVersion(version)), platformInfo);
+}
+
+/** Get the release asset name for a specific version and platform */
+export function getArchiveFileName(platformInfo: PlatformInfo, version: string): string {
+    return `${getArchiveDirectoryName(platformInfo, version)}.${platformInfo.archiveExt}`;
+}
+
+/**
+ * Every release asset name that could be the right one for this platform.
+ *
+ * Only for scanning releases, where the version is the thing being looked for.
+ * Ordered newest naming first.
+ */
+export function getArchiveFileNameCandidates(platformInfo: PlatformInfo): string[] {
+    return BINARY_NAME_CANDIDATES.map(
+        (baseName) => `${archiveDirectoryNameFor(baseName, platformInfo)}.${platformInfo.archiveExt}`
+    );
 }
 
 /**
@@ -97,12 +135,17 @@ export interface ExtensionPaths {
 
 /**
  * Get the expected executable path for a specific version
+ *
+ * Both the directory and the file inside it are version-keyed, so a v0.4.0 and
+ * a v0.5.0 install sit side by side under `bundled/libs` without either
+ * needing to know about the other.
  */
 export function getExecutablePath(context: ExtensionPaths, version: string): string {
     const platformInfo = getPlatformInfo();
     const versionedDir = getVersionedDir(context, version);
-    const archiveDirName = getArchiveDirectoryName(platformInfo);
-    return path.join(versionedDir, archiveDirName, platformInfo.executableName);
+    const archiveDirName = getArchiveDirectoryName(platformInfo, version);
+    const executable = `${serverExecutableName(parseServerVersion(version))}${platformInfo.executableSuffix}`;
+    return path.join(versionedDir, archiveDirName, executable);
 }
 
 /**

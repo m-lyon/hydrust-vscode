@@ -1,5 +1,5 @@
 /**
- * What each released hydra-lsp server actually understands.
+ * What each released server understands, and what it is called.
  *
  * The extension can be pointed at any released server binary, and older
  * servers quietly ignore settings they were never taught to read. This file
@@ -15,8 +15,6 @@
  * repository (github.com/m-lyon/hydra-lsp). Tag and line references are quoted
  * next to each entry so the table can be re-checked later.
  */
-
-import { BINARY_NAME } from './constants';
 
 /** A server version with the leading 'v' and any suffix stripped off. */
 export interface ServerVersion {
@@ -36,9 +34,11 @@ function ver(major: number, minor: number, patch: number): ServerVersion {
 /**
  * Pull the first version-looking token out of arbitrary text.
  *
- * Deliberately forgiving: it copes with 'hydrust-server 0.4.0', 'hydra-lsp
- * 0.4.0', 'v0.3.0', '0.3.0-dev' and a trailing newline, because the exact
- * shape of `--version` output is not something the extension should depend on.
+ * Deliberately forgiving: it copes with 'hydra-lsp 0.4.0', 'v0.3.0',
+ * '0.3.0-dev' and a trailing newline, because the exact shape of `--version`
+ * output is not something the extension should depend on. Servers from
+ * v0.5.0 onwards print whatever clap makes of the `hydrust` crate name, which
+ * matches the same pattern.
  */
 export function parseServerVersion(text: string | undefined): ServerVersion | undefined {
     if (!text) {
@@ -68,6 +68,83 @@ export function compareServerVersions(a: ServerVersion, b: ServerVersion): numbe
 /** True when `version` is `minimum` or anything newer. */
 export function isAtLeast(version: ServerVersion, minimum: ServerVersion): boolean {
     return compareServerVersions(version, minimum) >= 0;
+}
+
+/**
+ * What to call the project when talking to the user or writing a log line.
+ *
+ * Never used to build a path or look anything up: the name of the thing on
+ * disk is version-dependent, and that is what the two functions below are for.
+ */
+export const DISPLAY_NAME = 'hydrust';
+
+/**
+ * The basename the archive and the executable had before the rename.
+ *
+ * Every release up to and including v0.4.0 ships a `hydra-lsp-<target>`
+ * archive containing a `hydra-lsp` executable, confirmed against the v0.4.0
+ * `dist-manifest.json`.
+ */
+export const LEGACY_BINARY_NAME = 'hydra-lsp';
+
+/**
+ * First release in which the crate, the binary and the release archive are all
+ * called `hydrust`, and the language server is `hydrust server`.
+ */
+export const UNIFIED_BINARY_VERSION: ServerVersion = ver(0, 5, 0);
+
+/**
+ * Arguments the server is always launched with.
+ *
+ * Unconditional on purpose, with no version branch, so a wrong pre-launch
+ * version guess can never stop the server starting. Every released server
+ * tolerates it: pre-0.4.0 never parses argv at all (`git show
+ * v0.3.0:src/main.rs`), and v0.4.0 falls through to the `_ =>` arm in
+ * `handle_args` (v0.4.0 `src/main.rs:41`) — verified by running it, which
+ * exits 0 with clean stdout and one note on stderr. From v0.5.0 it is the
+ * subcommand that starts the language server. It looks like an oversight
+ * otherwise, hence this comment.
+ */
+export const SERVER_ARGS: readonly string[] = ['server'];
+
+/**
+ * Every basename the archive and the executable have ever had, newest first.
+ *
+ * For the two places with no version to key off: scanning GitHub releases for
+ * an asset (the scan is what determines the version) and looking for a server
+ * on PATH (nothing has been launched yet). Everywhere else has a concrete
+ * version and should use the functions below.
+ */
+export const BINARY_NAME_CANDIDATES: readonly string[] = [DISPLAY_NAME, LEGACY_BINARY_NAME];
+
+/**
+ * The basename used by a given server version, for both the release archive
+ * and the executable inside it.
+ *
+ * `undefined` means old rather than new: every archive up to v0.4.0 is named
+ * `hydra-lsp-<target>`, so guessing the new name for something unidentified
+ * would break the versions that actually exist today.
+ */
+function binaryBaseName(version: ServerVersion | undefined): string {
+    return version && isAtLeast(version, UNIFIED_BINARY_VERSION) ? DISPLAY_NAME : LEGACY_BINARY_NAME;
+}
+
+/**
+ * Basename of the release archive for a version, without the `-<target>`
+ * suffix or the extension.
+ */
+export function archiveName(version: ServerVersion | undefined): string {
+    return binaryBaseName(version);
+}
+
+/**
+ * Basename of the executable inside that archive, without any `.exe`.
+ *
+ * The same answer as `archiveName` for every version so far, but a different
+ * question: one decides what is downloaded, the other what is run.
+ */
+export function serverExecutableName(version: ServerVersion | undefined): string {
+    return binaryBaseName(version);
 }
 
 /**
@@ -440,7 +517,7 @@ export function buildCompatReport(input: CompatInput): CompatReport {
             if (supported && !supported.includes(entry.key)) {
                 unsupportedSettings.push({
                     name: entry.configKey,
-                    reason: `${BINARY_NAME} ${versionLabel} reports that it does not read '${entry.key}'.`,
+                    reason: `${DISPLAY_NAME} ${versionLabel} reports that it does not read '${entry.key}'.`,
                 });
             }
             continue;
@@ -448,14 +525,14 @@ export function buildCompatReport(input: CompatInput): CompatReport {
         if (!entry.since) {
             unsupportedSettings.push({
                 name: entry.configKey,
-                reason: `no released ${BINARY_NAME} reads '${entry.key}', so this setting does nothing.`,
+                reason: `no released ${DISPLAY_NAME} reads '${entry.key}', so this setting does nothing.`,
             });
             continue;
         }
         if (!isAtLeast(effectiveVersion, entry.since)) {
             unsupportedSettings.push({
                 name: entry.configKey,
-                reason: `needs ${BINARY_NAME} ${formatServerVersion(entry.since)} or later; ${versionLabel} ignores it.`,
+                reason: `needs ${DISPLAY_NAME} ${formatServerVersion(entry.since)} or later; ${versionLabel} ignores it.`,
             });
         }
     }
@@ -473,7 +550,7 @@ export function buildCompatReport(input: CompatInput): CompatReport {
             if (supported && !supported.includes(code)) {
                 unsupportedRules.push({
                     name: code,
-                    reason: `${BINARY_NAME} ${versionLabel} does not know this rule code, so the entry does nothing.`,
+                    reason: `${DISPLAY_NAME} ${versionLabel} does not know this rule code, so the entry does nothing.`,
                 });
             }
             continue;
@@ -498,7 +575,7 @@ export function buildCompatReport(input: CompatInput): CompatReport {
             unsupportedRules.push({
                 name: code,
                 reason:
-                    `${BINARY_NAME} ${versionLabel} calls this rule '${entry.previousCode}', and the ` +
+                    `${DISPLAY_NAME} ${versionLabel} calls this rule '${entry.previousCode}', and the ` +
                     'version was not known in time to send it under that name. Restarting the server ' +
                     'will fix it.',
             });
@@ -506,7 +583,7 @@ export function buildCompatReport(input: CompatInput): CompatReport {
         }
         unsupportedRules.push({
             name: code,
-            reason: `added in ${BINARY_NAME} ${formatServerVersion(entry.since)}; ${versionLabel} ignores it.`,
+            reason: `added in ${DISPLAY_NAME} ${formatServerVersion(entry.since)}; ${versionLabel} ignores it.`,
         });
     }
 

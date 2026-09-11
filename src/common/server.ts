@@ -2,7 +2,8 @@
 import * as vscode from 'vscode';
 import which from 'which';
 import { logger } from './logger';
-import { BINARY_NAME } from './constants';
+import { PATH_CANDIDATES } from './constants';
+import { SERVER_ARGS } from './compatTable';
 import { ExtensionSettings } from './settings';
 import { ensureServer, findExistingExecutable } from './download';
 import { ResolvedBinary, ServerCompat } from './compat';
@@ -43,10 +44,12 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
     // 2. Use environment if explicitly requested
     if (settings.importStrategy === 'fromEnvironment') {
         try {
-            const environmentPath = await which(BINARY_NAME, { nothrow: true });
-            if (environmentPath) {
-                logger.info(`Using environment executable: ${environmentPath}`);
-                return { path: environmentPath, source: 'environment' };
+            for (const candidate of PATH_CANDIDATES) {
+                const environmentPath = await which(candidate, { nothrow: true });
+                if (environmentPath) {
+                    logger.info(`Using environment executable: ${environmentPath}`);
+                    return { path: environmentPath, source: 'environment' };
+                }
             }
         } catch (err) {
             logger.debug(`Error checking PATH: ${err}`);
@@ -108,10 +111,11 @@ export async function startServer(
         context
     );
 
-    // Set up server options
+    // Set up server options. SERVER_ARGS is unconditional, including for
+    // servers released before the subcommand existed; see the constant.
     const serverExecutable: Executable = {
         command: binary.path,
-        args: [],
+        args: [...SERVER_ARGS],
         options: {
             env: process.env,
         },

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     ASSUMED_PRE_NEGOTIATION_VERSION,
+    BINARY_NAME_CANDIDATES,
     CAPABILITY_NEGOTIATION_VERSION,
     CLIENT_PROTOCOL_VERSION,
     FEATURE_COMPAT,
@@ -10,9 +11,12 @@ import {
     FEATURE_WATCHED_FILES,
     MINIMUM_SERVER_VERSION,
     RULE_COMPAT,
+    SERVER_ARGS,
     SETTING_COMPAT,
     ServerVersion,
+    UNIFIED_BINARY_VERSION,
     advertisesPullDiagnostics,
+    archiveName,
     buildCompatReport,
     compareServerVersions,
     formatServerVersion,
@@ -20,6 +24,7 @@ import {
     parseHydrustCapabilities,
     parseServerVersion,
     readServerInfoVersion,
+    serverExecutableName,
     transformDisabledRules,
     transformSettingsPayload,
 } from '../../src/common/compatTable';
@@ -221,7 +226,7 @@ describe('buildCompatReport in fallback mode', () => {
             'parameter-already-assigned',
             'too-many-positional-arguments',
         ]);
-        expect(report.unsupportedRules[0].reason).toContain('added in hydra-lsp v0.3.0');
+        expect(report.unsupportedRules[0].reason).toContain('added in hydrust v0.3.0');
     });
 
     it('stays quiet about a renamed rule that was rewritten instead', () => {
@@ -698,5 +703,38 @@ describe('advertisesPullDiagnostics', () => {
         expect(advertisesPullDiagnostics({ capabilities: { diagnosticProvider: null } })).toBe(false);
         expect(advertisesPullDiagnostics(undefined)).toBe(false);
         expect(advertisesPullDiagnostics('nope')).toBe(false);
+    });
+});
+
+describe('what the binary is called at a given version', () => {
+    it('uses the old name for everything up to the rename', () => {
+        // Every archive up to v0.4.0 is named hydra-lsp-<target> and holds a
+        // hydra-lsp executable, per the v0.4.0 dist-manifest.json.
+        expect(archiveName(v(0, 4, 0))).toBe('hydra-lsp');
+        expect(serverExecutableName(v(0, 4, 0))).toBe('hydra-lsp');
+        expect(archiveName(v(0, 1, 0))).toBe('hydra-lsp');
+        expect(archiveName(v(0, 4, 9))).toBe('hydra-lsp');
+    });
+
+    it('uses the new name from the unified release onwards', () => {
+        expect(archiveName(UNIFIED_BINARY_VERSION)).toBe('hydrust');
+        expect(serverExecutableName(UNIFIED_BINARY_VERSION)).toBe('hydrust');
+        expect(archiveName(v(0, 5, 1))).toBe('hydrust');
+        expect(archiveName(v(1, 0, 0))).toBe('hydrust');
+    });
+
+    it('treats an unknown version as old, since that is what exists today', () => {
+        expect(archiveName(undefined)).toBe('hydra-lsp');
+        expect(serverExecutableName(undefined)).toBe('hydra-lsp');
+    });
+
+    it('offers both names, newest first, where there is no version to key off', () => {
+        expect(BINARY_NAME_CANDIDATES).toEqual(['hydrust', 'hydra-lsp']);
+    });
+
+    it('always passes the server subcommand', () => {
+        // Unconditional by design: a wrong version guess must not be able to
+        // stop the server starting. See the constant for why it is safe.
+        expect(SERVER_ARGS).toEqual(['server']);
     });
 });

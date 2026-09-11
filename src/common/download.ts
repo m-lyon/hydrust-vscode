@@ -6,7 +6,8 @@ import * as crypto from 'crypto';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import { logger } from './logger';
-import { BINARY_NAME, getPlatformInfo, getDownloadUrl, getChecksumUrl } from './constants';
+import { getPlatformInfo, getDownloadUrl, getChecksumUrl } from './constants';
+import { getArchiveFileName, getArchiveFileNameCandidates } from './constants';
 import { getVersionedDir, getExecutablePath, getLibsRoot, isWindows } from './constants';
 import { fsapi } from './vscodeapi';
 import { isDeveloperMode } from './settings';
@@ -177,14 +178,19 @@ async function extractArchive(archivePath: string, destDir: string): Promise<voi
 
 /**
  * Get the latest release version from GitHub that contains an asset
- * matching the expected binary name for the current platform.
+ * matching one of the binary names for the current platform.
  *
  * This ensures the extension only resolves to a release that actually
  * provides the binary it expects to download.
+ *
+ * Either name is accepted, because the scan is what decides the version and so
+ * there is nothing to key the name off yet. The download URL is then derived
+ * from the tag rather than from whichever name happened to match, keeping one
+ * source of truth for what a given tag is called.
  */
 async function getLatestVersion(): Promise<string> {
     const platformInfo = getPlatformInfo();
-    const expectedAssetName = `${BINARY_NAME}-${platformInfo.platform}.${platformInfo.archiveExt}`;
+    const expectedAssetNames = getArchiveFileNameCandidates(platformInfo);
 
     return new Promise((resolve, reject) => {
         const options = {
@@ -219,23 +225,38 @@ async function getLatestVersion(): Promise<string> {
                         if (!release.tag_name || !Array.isArray(release.assets)) {
                             continue;
                         }
-                        const hasMatchingAsset = release.assets.some(
-                            (asset: { name: string }) => asset.name === expectedAssetName
+                        const matched = release.assets.find((asset: { name: string }) =>
+                            expectedAssetNames.includes(asset.name)
                         );
-                        if (hasMatchingAsset) {
-                            resolve(release.tag_name);
+                        if (matched) {
+                            const tag = release.tag_name;
+                            const derived = getArchiveFileName(platformInfo, tag);
+                            logger.info(`Release ${tag} carries '${matched.name}'.`);
+                            if (derived !== matched.name) {
+                                // The naming table and the release disagree, so
+                                // the download below is about to 404. Say which
+                                // tag and which two names, or it looks like a
+                                // network fault.
+                                logger.warn(
+                                    `Release ${tag} has an asset named '${matched.name}', but this ` +
+                                    `extension expects '${derived}' for that version. The naming ` +
+                                    'table is out of date and the download will fail.'
+                                );
+                            }
+                            resolve(tag);
                             return;
                         }
                     }
+                    const wanted = expectedAssetNames.map((name) => `'${name}'`).join(' or ');
                     notifyDeveloper(
-                        `No GitHub release found with asset matching '${expectedAssetName}'.`,
+                        `No GitHub release found with an asset matching ${wanted}.`,
                         'Inspected releases:',
                         releases.map((r: { tag_name?: string; assets?: { name: string }[] }) => ({
                             tag_name: r.tag_name,
                             asset_names: Array.isArray(r.assets) ? r.assets.map((a) => a.name) : [],
                         }))
                     );
-                    reject(new Error(`No release found with asset matching '${expectedAssetName}'`));
+                    reject(new Error(`No release found with an asset matching ${wanted}`));
                 } catch (err) {
                     notifyDeveloper(
                         `Failed to parse GitHub releases API response (status ${response.statusCode}).`,
@@ -458,6 +479,10 @@ function compareVersionsDesc(a: string, b: string): number {
  *
  * Used as a fallback when the normal download/resolve path fails (e.g. no
  * network) so the extension can still start with a previously-cached binary.
+ *
+ * Installs from either side of the rename can sit here together, since the
+ * directory name is the version and `getExecutablePath` derives the archive
+ * and executable names from it.
  */
 export async function findExistingExecutable(
     context: vscode.ExtensionContext

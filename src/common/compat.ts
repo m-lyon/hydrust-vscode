@@ -2,12 +2,12 @@ import * as vscode from 'vscode';
 import * as fs from 'fs-extra';
 import { spawn } from 'child_process';
 import { logger } from './logger';
-import { BINARY_NAME } from './constants';
 import {
     ASSUMED_PRE_NEGOTIATION_VERSION,
     CAPABILITY_NEGOTIATION_VERSION,
     CLIENT_PROTOCOL_VERSION,
     CompatReport,
+    DISPLAY_NAME,
     FEATURE_COMPAT,
     HydrustCapabilities,
     MINIMUM_SERVER_VERSION,
@@ -164,7 +164,7 @@ async function probeBinaryVersion(
         await rememberVersion(context, fingerprint, version);
     }
     if (version) {
-        logger.info(`${BINARY_NAME} at ${binaryPath} reports ${formatServerVersion(version)}.`);
+        logger.info(`${DISPLAY_NAME} at ${binaryPath} reports ${formatServerVersion(version)}.`);
     }
     return version;
 }
@@ -318,13 +318,13 @@ export class ServerCompat {
 
         if (!version) {
             logger.warn(
-                `Could not determine the ${BINARY_NAME} version before launch. ` +
+                `Could not determine the ${DISPLAY_NAME} version before launch. ` +
                 'Assuming the least capable behaviour: no optional features, and the ' +
                 'settings payload will be sent exactly as configured.'
             );
         } else if (!isAtLeast(version, MINIMUM_SERVER_VERSION)) {
             logger.warn(
-                `${BINARY_NAME} ${formatServerVersion(version)} is older than the minimum ` +
+                `${DISPLAY_NAME} ${formatServerVersion(version)} is older than the minimum ` +
                 `supported ${formatServerVersion(MINIMUM_SERVER_VERSION)}.`
             );
         }
@@ -354,7 +354,7 @@ export class ServerCompat {
         for (const rewrite of rewrites) {
             logger.info(
                 `Sending disabled rule '${rewrite.from}' as '${rewrite.to}': that is what ` +
-                `${BINARY_NAME} ${this.versionLabel} calls it.`
+                `${DISPLAY_NAME} ${this.versionLabel} calls it.`
             );
         }
         return next;
@@ -391,7 +391,7 @@ export class ServerCompat {
             logger.debug(`Capability block: ${JSON.stringify(this.capabilities)}`);
         } else if (this.version && isAtLeast(this.version, CAPABILITY_NEGOTIATION_VERSION)) {
             logger.warn(
-                `${BINARY_NAME} ${this.versionLabel} should describe its own capabilities but did not. ` +
+                `${DISPLAY_NAME} ${this.versionLabel} should describe its own capabilities but did not. ` +
                 'Falling back to the built-in version table.'
             );
         } else if (!this.version) {
