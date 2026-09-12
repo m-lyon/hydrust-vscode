@@ -2,7 +2,7 @@
  * A stand-in for the 'vscode' module, used by the hermetic unit tests.
  *
  * The real module only exists inside a running extension host, so vitest is
- * configured (see vitest.config.ts) to resolve every `import 'vscode'` to this
+ * configured (see vitest.config.mts) to resolve every `import 'vscode'` to this
  * file instead. Only the small slice of the API the compatibility layer touches
  * is implemented here, and every interesting call is recorded so a test can
  * check what the extension did rather than guessing.
