@@ -669,11 +669,14 @@ describe('the release pin script', () => {
     });
 
     it('orders tags exactly as the extension does', () => {
-        const tags = ['v0.6.0', 'v0.6.0-hotfix.1', 'v0.10.0', 'v0.6.1', '0.6.0.1', 'v0.5.9-rc'];
+        const tags = ['v0.6.0', 'v0.6.0-hotfix.1', 'v0.10.0', 'v0.6.1', '0.6.0.1', 'v0.5.9-rc', 'v0.5.9'];
         const script = [...tags].sort(compareTagsDesc);
         const extension = [...tags].sort((a, b) => compareVersionsDesc(a.replace(/^v/, ''), b.replace(/^v/, '')));
         expect(script).toEqual(extension);
         expect(script.indexOf('v0.6.0-hotfix.1')).toBeLessThan(script.indexOf('v0.6.0'));
+        expect(script.indexOf('v0.5.9')).toBeLessThan(script.indexOf('v0.5.9-rc'));
+        expect(['v0.5.9-rc', 'v0.5.9'].sort(compareTagsDesc)).toEqual(['v0.5.9', 'v0.5.9-rc']);
+        expect(['0.5.9-rc', '0.5.9'].sort(compareVersionsDesc)).toEqual(['0.5.9', '0.5.9-rc']);
     });
 
     it('rewrites the pin in constants.ts and nothing else', () => {

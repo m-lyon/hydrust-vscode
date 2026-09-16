@@ -928,7 +928,10 @@ export function compareVersionsDesc(a: string, b: string): number {
                 return diff;
             }
         }
-        return 0;
+        // Equal numbers: a plain version outranks one with a suffix (0.5.9 > 0.5.9-rc).
+        const aPlain = /^\d+(\.\d+)*$/.test(a);
+        const bPlain = /^\d+(\.\d+)*$/.test(b);
+        return aPlain === bPlain ? 0 : aPlain ? -1 : 1;
     }
     return b.localeCompare(a);
 }

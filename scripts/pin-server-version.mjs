@@ -36,7 +36,8 @@ export function compareTagsDesc(a, b) {
                 return diff;
             }
         }
-        return 0;
+        const [xPlain, yPlain] = [/^\d+(\.\d+)*$/.test(x), /^\d+(\.\d+)*$/.test(y)];
+        return xPlain === yPlain ? 0 : xPlain ? -1 : 1;
     }
     return y.localeCompare(x);
 }
