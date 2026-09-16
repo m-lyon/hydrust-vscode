@@ -17,7 +17,7 @@ export const PLATFORM_ASSETS = [
 ];
 
 /** Must match TAG_PATTERN in src/common/download.ts. */
-const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
+export const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
 
 const PIN_PATTERN = /(export const FALLBACK_SERVER_VERSION = ')[^']*(';)/;
 

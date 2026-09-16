@@ -58,7 +58,7 @@ export function versionLastUsedKey(dir: string): string {
 }
 
 /** Release tags that are safe to use in file paths and shell commands. */
-const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
+export const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
 
 const USER_AGENT = 'hydra-lsp-vscode';
 const MAX_REDIRECTS = 5;
@@ -727,6 +727,11 @@ async function installVersion(tag: string, context: vscode.ExtensionContext): Pr
     try {
         const installedPath = await downloadServer(tag, context, report);
         return { path: installedPath, version: tag };
+    } catch (err) {
+        if (!(await fsapi.pathExists(executablePath))) {
+            await forgetVersionUsed(context, tag);
+        }
+        throw err;
     } finally {
         finish();
     }
@@ -753,6 +758,7 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
             logger.info(`Using ${cached.tag}, resolved as the latest release within the last day.`);
             return { path: executablePath, version: cached.tag };
         }
+        await forgetVersionUsed(context, cached.tag);
     }
 
     const useResolved = async (tag: string): Promise<InstalledServer> => {
@@ -807,6 +813,11 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
     }
 }
 
+/** Drop the last-used record for a version that turned out not to be installed. */
+async function forgetVersionUsed(context: vscode.ExtensionContext, version: string): Promise<void> {
+    await context.globalState.update(versionLastUsedKey(path.basename(getVersionedDir(context, version))), undefined);
+}
+
 /**
  * Record that this window is using a version, so other windows do not prune it.
  * Called whenever the server is (re)started, including from a fallback binary.
@@ -840,10 +851,7 @@ export function ensureServer(
     }
 
     const work = key === 'latest' ? ensureLatest(context) : installVersion(key, context);
-    const shared = work.then(async (installed) => {
-        await markVersionUsed(context, installed.version);
-        return installed;
-    }).finally(() => {
+    const shared = work.finally(() => {
         inFlight.delete(key);
     });
     inFlight.set(key, shared);

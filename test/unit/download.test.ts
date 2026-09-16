@@ -92,6 +92,7 @@ import {
     MIN_API_BACKOFF_MS,
     PRUNE_UNUSED_MS,
     STALE_STAGING_MS,
+    TAG_PATTERN,
     ensureServer,
     markVersionUsed,
     rateLimitRetryTime,
@@ -105,7 +106,7 @@ import {
     getLibsRoot,
     getPlatformInfo,
 } from '../../src/common/constants';
-import { PLATFORM_ASSETS, pickPinnableRelease, rewritePin } from '../../scripts/pin-server-version.mjs';
+import { PLATFORM_ASSETS, TAG_PATTERN as SCRIPT_TAG_PATTERN, pickPinnableRelease, rewritePin } from '../../scripts/pin-server-version.mjs';
 import { createStubExtensionContext, resetVscodeStub, stub } from '../stubs/vscode';
 
 const RELEASES_PAGE = 'https://github.com/m-lyon/hydra-lsp/releases/latest';
@@ -354,6 +355,14 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
         await ensure('v0.3.0');
 
         expect(stub.globalState.get(versionLastUsedKey('0.3.0'))).toBeGreaterThan(stale);
+    });
+
+    it('leaves no last-used record for a version whose install failed', async () => {
+        net.routes.set(assetUrl('v0.5.0'), { status: 404 });
+
+        await expect(ensure('v0.5.0')).rejects.toThrow();
+
+        expect(stub.globalState.get(versionLastUsedKey('0.5.0'))).toBeUndefined();
     });
 
     it('uses an explicitly configured version without resolving anything', async () => {
@@ -628,6 +637,11 @@ describe('the release pin script', () => {
             ])
         ).toBe('v0.4.2');
         expect(pickPinnableRelease([])).toBeUndefined();
+    });
+
+    it('accepts exactly the tags the extension accepts', () => {
+        expect(SCRIPT_TAG_PATTERN.source).toBe(TAG_PATTERN.source);
+        expect(SCRIPT_TAG_PATTERN.flags).toBe(TAG_PATTERN.flags);
     });
 
     it('rewrites the pin in constants.ts and nothing else', () => {
