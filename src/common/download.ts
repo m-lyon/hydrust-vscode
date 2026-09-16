@@ -102,11 +102,11 @@ function request(
 }
 
 async function readBody(response: IncomingMessage): Promise<string> {
-    let data = '';
+    const chunks: Buffer[] = [];
     for await (const chunk of response) {
-        data += chunk;
+        chunks.push(chunk);
     }
-    return data;
+    return Buffer.concat(chunks).toString('utf8');
 }
 
 function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
@@ -384,7 +384,7 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
     }
 
     for (const release of releases) {
-        if (!release.tag_name || !Array.isArray(release.assets)) {
+        if (release.draft || release.prerelease || !release.tag_name || !Array.isArray(release.assets)) {
             continue;
         }
         const hasMatchingAsset = release.assets.some(
@@ -423,6 +423,13 @@ async function downloadServer(
 ): Promise<string> {
     const progress = progressCallback || ((msg: string) => logger.info(msg));
     const versionedDir = getVersionedDir(context, resolvedVersion);
+    // Other VS Code windows share this storage, so build the install somewhere
+    // only this attempt uses and move it into place once it is complete.
+    const stagingDir = path.join(
+        getLibsRoot(context),
+        `.staging-${path.basename(versionedDir)}-${crypto.randomBytes(6).toString('hex')}`
+    );
+    const stagingExecutablePath = path.join(stagingDir, path.relative(versionedDir, getExecutablePath(context, resolvedVersion)));
 
     try {
         // Get platform info
@@ -434,10 +441,10 @@ async function downloadServer(
         const checksumUrl = getChecksumUrl(resolvedVersion, platformInfo);
         logger.info(`Download URL: ${downloadUrl}`);
 
-        await fsapi.ensureDir(versionedDir);
+        await fsapi.ensureDir(stagingDir);
 
         const archiveFilename = path.basename(downloadUrl);
-        const archivePath = path.join(versionedDir, archiveFilename);
+        const archivePath = path.join(stagingDir, archiveFilename);
         const executablePath = getExecutablePath(context, resolvedVersion);
 
         // Download archive
@@ -455,30 +462,39 @@ async function downloadServer(
 
         // Extract archive
         progress('Extracting archive...');
-        await extractArchive(archivePath, versionedDir);
+        await extractArchive(archivePath, stagingDir);
         logger.info('Archive extracted');
 
         // Clean up archive
         await fs.unlink(archivePath);
 
         // Verify executable exists
-        if (!(await fsapi.pathExists(executablePath))) {
-            throw new Error(`Executable not found after extraction: ${executablePath}`);
+        if (!(await fsapi.pathExists(stagingExecutablePath))) {
+            throw new Error(`Executable not found after extraction: ${stagingExecutablePath}`);
         }
 
         // Make executable on Unix systems
         if (!isWindows()) {
-            await execAsync(`chmod +x "${executablePath}"`);
+            await execAsync(`chmod +x "${stagingExecutablePath}"`);
             logger.info('Made executable');
+        }
+
+        try {
+            await fs.rename(stagingDir, versionedDir);
+        } catch (err) {
+            // Another window may have finished installing this version first.
+            if (!(await fsapi.pathExists(executablePath))) {
+                throw err;
+            }
+            logger.info(`Version ${resolvedVersion} was installed concurrently; using that install.`);
+            await fs.remove(stagingDir).catch(() => undefined);
         }
 
         progress(`Hydrust Server ${resolvedVersion} installed successfully`);
         return executablePath;
     } catch (err) {
         logger.error(`Failed to download server: ${err}`);
-        // Nothing usable was in this directory, or the download would not have
-        // been attempted, so a half-finished install can go.
-        await fs.remove(versionedDir).catch(() => undefined);
+        await fs.remove(stagingDir).catch(() => undefined);
         throw err;
     }
 }
@@ -585,7 +601,7 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
  * Singleton guard: while a server is being resolved or downloaded, every
  * concurrent caller awaits the same promise rather than starting its own.
  */
-let inFlight: Promise<InstalledServer> | undefined;
+const inFlight = new Map<string, Promise<InstalledServer>>();
 
 /**
  * Ensure the server binary is available, downloading if necessary
@@ -594,18 +610,19 @@ export function ensureServer(
     version: string,
     context: vscode.ExtensionContext
 ): Promise<InstalledServer> {
-    if (inFlight) {
+    const key = version === 'latest' || !version ? 'latest' : normaliseTag(version);
+    const existing = inFlight.get(key);
+    if (existing) {
         logger.info('Server resolution already in progress, waiting for it to complete...');
-        return inFlight;
+        return existing;
     }
 
-    const work = version === 'latest' || !version
-        ? ensureLatest(context)
-        : installVersion(normaliseTag(version), context);
-    inFlight = work.finally(() => {
-        inFlight = undefined;
+    const work = key === 'latest' ? ensureLatest(context) : installVersion(key, context);
+    const shared = work.finally(() => {
+        inFlight.delete(key);
     });
-    return inFlight;
+    inFlight.set(key, shared);
+    return shared;
 }
 
 /**
@@ -655,6 +672,9 @@ export async function findExistingExecutable(
 
     const candidates: { version: string; execPath: string }[] = [];
     for (const entry of entries) {
+        if (entry.startsWith('.')) {
+            continue;
+        }
         const execPath = getExecutablePath(context, entry);
         if (await fsapi.pathExists(execPath)) {
             candidates.push({ version: entry, execPath });

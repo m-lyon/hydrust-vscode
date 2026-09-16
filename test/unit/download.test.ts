@@ -216,6 +216,48 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
         expect(fs.existsSync(path.join(getLibsRoot(context), '0.5.0'))).toBe(false);
     });
 
+    it('falls through to the API when the redirect tag fails to install for another reason', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.5.0'));
+        net.routes.set(assetUrl('v0.5.0'), { status: 500 });
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.4.2', assets: [{ name: assetName() }] }]),
+        });
+        publishRelease('v0.4.2');
+
+        await expect(ensure()).resolves.toMatchObject({ version: 'v0.4.2' });
+        expect(stub.globalState.get(LATEST_TAG_CACHE_KEY)).toMatchObject({ tag: 'v0.4.2' });
+    });
+
+    it('does not retry the redirect tag when the API points at the same release', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.9.0'));
+        net.routes.set(assetUrl('v0.9.0'), { status: 500 });
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.9.0', assets: [{ name: assetName() }] }]),
+        });
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(requested(assetUrl('v0.9.0'))).toBe(1);
+        expect(requested(RELEASES_API)).toBe(1);
+    });
+
+    it('skips prereleases when looking for a release through the API', async () => {
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([
+                { tag_name: 'v0.6.0-rc.1', prerelease: true, assets: [{ name: assetName() }] },
+                { tag_name: 'v0.4.2', assets: [{ name: assetName() }] },
+            ]),
+        });
+        publishRelease('v0.4.2');
+
+        await expect(ensure()).resolves.toMatchObject({ version: 'v0.4.2' });
+        expect(requested(assetUrl('v0.6.0-rc.1'))).toBe(0);
+    });
+
     it('backs off after a rate limit and installs the fallback release without a popup', async () => {
         const resetSeconds = Math.floor(Date.now() / 1000) + 1800;
         net.routes.set(RELEASES_PAGE, 'network-error');
