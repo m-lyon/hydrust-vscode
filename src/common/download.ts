@@ -914,24 +914,26 @@ export function ensureServer(
  * Semver-aware on numeric segments; falls back to localeCompare for non-numeric tags.
  */
 export function compareVersionsDesc(a: string, b: string): number {
-    const parseSegs = (v: string): number[] | null => {
-        const segs = v.split('.').map((s) => parseInt(s, 10));
-        return segs.every((n) => Number.isFinite(n)) ? segs : null;
+    // Only the leading dotted numbers are the version; anything after is a
+    // prerelease/build label ranking below the plain version (0.5.9 > 0.5.9-rc.2).
+    const parse = (v: string): { segs: number[]; suffix: string } | null => {
+        const match = /^\d+(\.\d+)*/.exec(v);
+        return match ? { segs: match[0].split('.').map(Number), suffix: v.slice(match[0].length) } : null;
     };
-    const aSegs = parseSegs(a);
-    const bSegs = parseSegs(b);
-    if (aSegs && bSegs) {
-        const len = Math.max(aSegs.length, bSegs.length);
+    const aVer = parse(a);
+    const bVer = parse(b);
+    if (aVer && bVer) {
+        const len = Math.max(aVer.segs.length, bVer.segs.length);
         for (let i = 0; i < len; i++) {
-            const diff = (bSegs[i] ?? 0) - (aSegs[i] ?? 0);
+            const diff = (bVer.segs[i] ?? 0) - (aVer.segs[i] ?? 0);
             if (diff !== 0) {
                 return diff;
             }
         }
-        // Equal numbers: a plain version outranks one with a suffix (0.5.9 > 0.5.9-rc).
-        const aPlain = /^\d+(\.\d+)*$/.test(a);
-        const bPlain = /^\d+(\.\d+)*$/.test(b);
-        return aPlain === bPlain ? 0 : aPlain ? -1 : 1;
+        if (!aVer.suffix || !bVer.suffix) {
+            return aVer.suffix === bVer.suffix ? 0 : aVer.suffix ? 1 : -1;
+        }
+        return bVer.suffix.localeCompare(aVer.suffix, undefined, { numeric: true });
     }
     return b.localeCompare(a);
 }

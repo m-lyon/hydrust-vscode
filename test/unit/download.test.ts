@@ -673,10 +673,14 @@ describe('the release pin script', () => {
         const script = [...tags].sort(compareTagsDesc);
         const extension = [...tags].sort((a, b) => compareVersionsDesc(a.replace(/^v/, ''), b.replace(/^v/, '')));
         expect(script).toEqual(extension);
-        expect(script.indexOf('v0.6.0-hotfix.1')).toBeLessThan(script.indexOf('v0.6.0'));
+        expect(script.indexOf('v0.6.0')).toBeLessThan(script.indexOf('v0.6.0-hotfix.1'));
+        expect(script.indexOf('v0.6.0-hotfix.1')).toBeLessThan(script.indexOf('v0.5.9'));
         expect(script.indexOf('v0.5.9')).toBeLessThan(script.indexOf('v0.5.9-rc'));
         expect(['v0.5.9-rc', 'v0.5.9'].sort(compareTagsDesc)).toEqual(['v0.5.9', 'v0.5.9-rc']);
         expect(['0.5.9-rc', '0.5.9'].sort(compareVersionsDesc)).toEqual(['0.5.9', '0.5.9-rc']);
+        expect(['1.0.0-rc.2', '1.0.0'].sort(compareVersionsDesc)).toEqual(['1.0.0', '1.0.0-rc.2']);
+        expect(['v1.0.0-rc.2', 'v1.0.0'].sort(compareTagsDesc)).toEqual(['v1.0.0', 'v1.0.0-rc.2']);
+        expect(['1.0.0-rc.2', '1.0.0-rc.10'].sort(compareVersionsDesc)).toEqual(['1.0.0-rc.10', '1.0.0-rc.2']);
     });
 
     it('rewrites the pin in constants.ts and nothing else', () => {

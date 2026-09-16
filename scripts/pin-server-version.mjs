@@ -23,23 +23,24 @@ const PIN_PATTERN = /(export const FALLBACK_SERVER_VERSION = ')[^']*(';)/;
 
 /** Compare two tags newest first. Must match compareVersionsDesc in src/common/download.ts. */
 export function compareTagsDesc(a, b) {
-    const [x, y] = [a.replace(/^v/, ''), b.replace(/^v/, '')];
-    const parseSegs = (v) => {
-        const segs = v.split('.').map((s) => parseInt(s, 10));
-        return segs.every((n) => Number.isFinite(n)) ? segs : null;
+    const parse = (v) => {
+        const match = /^\d+(\.\d+)*/.exec(v);
+        return match ? { segs: match[0].split('.').map(Number), suffix: v.slice(match[0].length) } : null;
     };
-    const [xSegs, ySegs] = [parseSegs(x), parseSegs(y)];
-    if (xSegs && ySegs) {
-        for (let i = 0; i < Math.max(xSegs.length, ySegs.length); i++) {
-            const diff = (ySegs[i] ?? 0) - (xSegs[i] ?? 0);
+    const [x, y] = [parse(a.replace(/^v/, '')), parse(b.replace(/^v/, ''))];
+    if (x && y) {
+        for (let i = 0; i < Math.max(x.segs.length, y.segs.length); i++) {
+            const diff = (y.segs[i] ?? 0) - (x.segs[i] ?? 0);
             if (diff !== 0) {
                 return diff;
             }
         }
-        const [xPlain, yPlain] = [/^\d+(\.\d+)*$/.test(x), /^\d+(\.\d+)*$/.test(y)];
-        return xPlain === yPlain ? 0 : xPlain ? -1 : 1;
+        if (!x.suffix || !y.suffix) {
+            return x.suffix === y.suffix ? 0 : x.suffix ? 1 : -1;
+        }
+        return y.suffix.localeCompare(x.suffix, undefined, { numeric: true });
     }
-    return y.localeCompare(x);
+    return b.replace(/^v/, '').localeCompare(a.replace(/^v/, ''));
 }
 
 /** The highest stable release, by version, with every platform archive. */
