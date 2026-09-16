@@ -551,33 +551,34 @@ async function downloadServer(
             logger.info('Made executable');
         }
 
-        const useConcurrentInstall = async () => {
-            // Another window finished installing this version first.
-            logger.info(`Version ${resolvedVersion} was installed concurrently; using that install.`);
-            await fs.remove(stagingDir).catch(() => undefined);
-        };
+        if ((await fsapi.pathExists(versionedDir)) && !(await fsapi.pathExists(executablePath))) {
+            // A leftover directory without the executable is in the way. Renaming onto
+            // it fails with EPERM on Windows, so clear it first. Move it aside rather
+            // than deleting in place, so an install another window finished just now
+            // is never removed.
+            const discardDir = `${stagingDir}-discard`;
+            try {
+                await renameWithRetry(versionedDir, discardDir);
+                if (await fsapi.pathExists(path.join(discardDir, path.relative(versionedDir, executablePath)))) {
+                    await renameWithRetry(discardDir, versionedDir);
+                } else {
+                    logger.warn(`Replacing incomplete install at ${versionedDir}`);
+                    await fs.remove(discardDir);
+                }
+            } catch (err) {
+                logger.warn(`Could not clear incomplete install at ${versionedDir}: ${err}`);
+            }
+        }
+
         try {
             await renameWithRetry(stagingDir, versionedDir);
         } catch (err) {
-            if (await fsapi.pathExists(executablePath)) {
-                await useConcurrentInstall();
-            } else {
-                const code = (err as NodeJS.ErrnoException).code;
-                if (code !== 'ENOTEMPTY' && code !== 'EEXIST') {
-                    throw err;
-                }
-                // A leftover directory without the executable is in the way.
-                logger.warn(`Replacing incomplete install at ${versionedDir}: ${err}`);
-                await fs.remove(versionedDir);
-                try {
-                    await renameWithRetry(stagingDir, versionedDir);
-                } catch (retryErr) {
-                    if (!(await fsapi.pathExists(executablePath))) {
-                        throw retryErr;
-                    }
-                    await useConcurrentInstall();
-                }
+            if (!(await fsapi.pathExists(executablePath))) {
+                throw err;
             }
+            // Another window finished installing this version first.
+            logger.info(`Version ${resolvedVersion} was installed concurrently; using that install.`);
+            await fs.remove(stagingDir).catch(() => undefined);
         }
 
         progress(`Hydrust Server ${resolvedVersion} installed successfully`);
