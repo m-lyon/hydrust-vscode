@@ -111,7 +111,7 @@ import { PLATFORM_ASSETS, TAG_PATTERN as SCRIPT_TAG_PATTERN, compareTagsDesc, pi
 import { createStubExtensionContext, resetVscodeStub, stub } from '../stubs/vscode';
 
 const RELEASES_PAGE = 'https://github.com/m-lyon/hydra-lsp/releases/latest';
-const RELEASES_API = 'https://api.github.com/repos/m-lyon/hydra-lsp/releases';
+const RELEASES_API = 'https://api.github.com/repos/m-lyon/hydra-lsp/releases?per_page=100';
 
 let scratchDir: string;
 let context: ReturnType<typeof createStubExtensionContext>;

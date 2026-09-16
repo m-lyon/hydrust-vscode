@@ -33,6 +33,12 @@ export const FAILED_INSTALL_KEY = 'hydrust.failedServerInstall.v1';
 /** How long a tag that failed to install is skipped when resolving `latest`. */
 export const FAILED_INSTALL_TTL_MS = 60 * 60 * 1000;
 
+/** globalState key holding the latest tag found to have no archive for this platform, and when. */
+export const MISSING_ASSET_KEY = 'hydrust.missingServerAsset.v1';
+
+/** How long a latest tag without an archive for this platform is not re-resolved or re-downloaded. */
+export const MISSING_ASSET_TTL_MS = 60 * 60 * 1000;
+
 /** Timeout for the small metadata requests made while resolving a version. */
 export const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -81,6 +87,9 @@ interface CachedReleasesEtag {
 
 /** The requested release does not have the file that was asked for. */
 class AssetNotFoundError extends Error {}
+
+/** The configured hydrust.serverVersion is not a valid version. */
+export class InvalidServerVersionError extends Error {}
 
 /**
  * In developer mode, log full details and surface a popup with a "Show Logs"
@@ -368,7 +377,7 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
 
     const platformInfo = getPlatformInfo();
     const expectedAssetName = `${BINARY_NAME}-${platformInfo.platform}.${platformInfo.archiveExt}`;
-    const url = `https://api.github.com/repos/${SERVER_REPO}/releases`;
+    const url = `https://api.github.com/repos/${SERVER_REPO}/releases?per_page=100`;
     const cachedEtag = context.globalState.get<CachedReleasesEtag>(API_ETAG_CACHE_KEY);
 
     const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
@@ -769,11 +778,17 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
         if (failed?.tag === tag && Date.now() - failed.checkedAt < FAILED_INSTALL_TTL_MS) {
             throw new Error(`installing ${tag} failed recently; not retrying yet`);
         }
+        const missing = context.globalState.get<CachedLatestTag>(MISSING_ASSET_KEY);
+        if (missing?.tag === tag && Date.now() - missing.checkedAt < MISSING_ASSET_TTL_MS) {
+            throw new AssetNotFoundError(`${tag} recently had no archive for this platform`);
+        }
         let installed: InstalledServer;
         try {
             installed = await installVersion(tag, context);
         } catch (err) {
-            if (!(err instanceof AssetNotFoundError)) {
+            if (err instanceof AssetNotFoundError) {
+                await context.globalState.update(MISSING_ASSET_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
+            } else {
                 await context.globalState.update(FAILED_INSTALL_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
             }
             throw err;
@@ -783,7 +798,10 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
     };
 
     let firstError: unknown;
-    const redirectTag = await resolveLatestFromRedirect();
+    const missing = context.globalState.get<CachedLatestTag>(MISSING_ASSET_KEY);
+    const redirectTag = missing && Date.now() - missing.checkedAt < MISSING_ASSET_TTL_MS
+        ? missing.tag
+        : await resolveLatestFromRedirect();
     if (redirectTag) {
         try {
             return await useResolved(redirectTag);
@@ -865,7 +883,7 @@ export function ensureServer(
 ): Promise<InstalledServer> {
     const key = version === 'latest' || !version ? 'latest' : normaliseTag(version);
     if (key !== 'latest' && !TAG_PATTERN.test(key)) {
-        return Promise.reject(new Error(`Invalid hydrust.serverVersion ${JSON.stringify(version)}: expected 'latest' or a version like 0.4.2`));
+        return Promise.reject(new InvalidServerVersionError(`Invalid hydrust.serverVersion ${JSON.stringify(version)}: expected 'latest' or a version like 0.4.2`));
     }
     const existing = inFlight.get(key);
     if (existing) {

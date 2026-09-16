@@ -4,7 +4,7 @@ import which from 'which';
 import { logger } from './logger';
 import { BINARY_NAME } from './constants';
 import { ExtensionSettings } from './settings';
-import { ensureServer, findExistingExecutable, markVersionUsed } from './download';
+import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
 import { ResolvedBinary, ServerCompat } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
@@ -63,6 +63,9 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
         const installed = await ensureServer(settings.serverVersion, context);
         return { path: installed.path, source: 'bundled', version: installed.version };
     } catch (err) {
+        if (err instanceof InvalidServerVersionError) {
+            throw err;
+        }
         // ensureServer can fail for network/API reasons (GitHub down, offline,
         // unexpected payload, etc.). Before giving up, look for a previously
         // downloaded binary on disk so the extension can still start.
