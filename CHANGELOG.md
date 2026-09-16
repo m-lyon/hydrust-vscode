@@ -5,7 +5,7 @@
 - Fixed the extension failing to start when the GitHub API rate limit is exhausted
 - Downloaded server binaries are now kept in global storage, so they survive extension updates
 - The resolved `latest` server version is cached for a day, so starting the server no longer contacts GitHub when a binary is already installed
-- `latest` is now resolved from the GitHub releases page, which is not subject to the API rate limit. The API is only used as a fallback, with rate-limit backoff and conditional requests
+- `latest` is now resolved from the GitHub releases page, which is not subject to the API rate limit. The API is only used as a fallback, backing off after a rate-limit response
 - If no version can be resolved and nothing is installed, a known-good server release is downloaded instead
 - Added timeouts to server version and download requests
 

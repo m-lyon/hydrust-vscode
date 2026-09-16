@@ -21,7 +21,7 @@ interface Reply {
 }
 
 /** A URL either gets a fixed reply, a reply built from the request, or a connection error. */
-type Route = Reply | ((headers: Record<string, string>) => Reply) | 'network-error' | 'timeout';
+type Route = Reply | ((headers: Record<string, string>) => Reply) | 'network-error' | 'timeout' | 'stall-midway';
 
 const net = vi.hoisted(() => ({
     routes: new Map<string, unknown>(),
@@ -37,8 +37,13 @@ vi.mock('https', async () => {
         options: { method?: string; headers?: Record<string, string> },
         callback: (response: unknown) => void
     ) {
+        let response: { destroy(err: Error): void } | undefined;
         const req = Object.assign(new EventEmitter(), {
-            destroy: (err: Error) => setImmediate(() => req.emit('error', err)),
+            destroy: (err: Error) =>
+                setImmediate(() => {
+                    response?.destroy(err);
+                    req.emit('error', err);
+                }),
             end: () =>
                 setImmediate(() => {
                     const method = options.method ?? 'GET';
@@ -49,13 +54,22 @@ vi.mock('https', async () => {
                         req.emit('timeout');
                         return;
                     }
+                    if (route === 'stall-midway') {
+                        // Part of the body arrives, then nothing more until the idle timeout.
+                        const body = new Readable({ read: () => undefined });
+                        body.push(Buffer.alloc(1024, 1));
+                        response = Object.assign(body, { statusCode: 200, statusMessage: '', headers: {} });
+                        callback(response);
+                        setTimeout(() => req.emit('timeout'), 20);
+                        return;
+                    }
                     if (route === undefined || route === 'network-error') {
                         req.emit('error', new Error(`connect ECONNREFUSED (${url})`));
                         return;
                     }
                     const reply = typeof route === 'function' ? route(headers) : route;
                     const chunks = method === 'HEAD' || reply.body === undefined ? [] : [Buffer.from(reply.body)];
-                    const response = Object.assign(Readable.from(chunks), {
+                    response = Object.assign(Readable.from(chunks), {
                         statusCode: reply.status,
                         statusMessage: '',
                         headers: reply.headers ?? {},
@@ -342,7 +356,11 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
 
     it('replaces a leftover install directory that has no executable', async () => {
         publishRelease('v0.3.0');
-        fs.mkdirSync(path.join(getLibsRoot(context), '0.3.0', 'leftover'), { recursive: true });
+        const leftover = path.join(getLibsRoot(context), '0.3.0', 'leftover');
+        fs.mkdirSync(leftover, { recursive: true });
+        const old = new Date(Date.now() - STALE_STAGING_MS - 60_000);
+        fs.utimesSync(leftover, old, old);
+        fs.utimesSync(path.dirname(leftover), old, old);
 
         const installed = await ensure('v0.3.0');
 
@@ -415,6 +433,45 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
 
         await expect(ensure('v0.3.0')).rejects.toThrow('timed out');
         expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
+    });
+
+    it('abandons a download that stalls partway through the body and removes the partial archive', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(assetUrl('v0.3.0'), 'stall-midway');
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('timed out');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
+    });
+
+    it('leaves a recently changed install directory alone, since another window may be finishing it', async () => {
+        publishRelease('v0.3.0');
+        const recent = path.join(getLibsRoot(context), '0.3.0', 'in-progress');
+        fs.mkdirSync(recent, { recursive: true });
+
+        await expect(ensure('v0.3.0')).rejects.toThrow();
+        expect(fs.existsSync(recent)).toBe(true);
+    });
+
+    it('keeps only the new install and the newest previous one', async () => {
+        installOnDisk('v0.1.0');
+        installOnDisk('v0.2.0');
+        installOnDisk('v0.2.5');
+        publishRelease('v0.3.0');
+
+        await ensure('v0.3.0');
+
+        expect(fs.readdirSync(getLibsRoot(context)).sort()).toEqual(['0.2.5', '0.3.0']);
+    });
+
+    it('treats a 403 without rate-limit headers as an ordinary failure', async () => {
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, { status: 403, body: '{"message":"Forbidden"}' });
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(stub.globalState.has(API_BACKOFF_KEY)).toBe(false);
+        expect(stub.logs.some((line) => line.includes('rate limit exceeded'))).toBe(false);
+        expect(stub.logs.some((line) => line.includes('returned status 403'))).toBe(true);
     });
 
     it('shares one resolution between concurrent callers', async () => {

@@ -41,6 +41,29 @@ const clientStub = vi.hoisted(() => ({
     startError: undefined as Error | undefined,
 }));
 
+const downloadStub = vi.hoisted(() => ({
+    ensureError: undefined as Error | undefined,
+    existing: undefined as { path: string; version: string } | undefined,
+    scans: 0,
+}));
+
+vi.mock('../../src/common/download', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/common/download')>();
+    return {
+        ...actual,
+        ensureServer: async (...args: Parameters<typeof actual.ensureServer>) => {
+            if (downloadStub.ensureError) {
+                throw downloadStub.ensureError;
+            }
+            return actual.ensureServer(...args);
+        },
+        findExistingExecutable: async () => {
+            downloadStub.scans++;
+            return downloadStub.existing;
+        },
+    };
+});
+
 vi.mock('vscode-languageclient/node', () => {
     class LanguageClient {
         private readonly record: RecordedClient;
@@ -154,6 +177,9 @@ beforeEach(() => {
     clientStub.clients = [];
     clientStub.initializeResult = initializeResult('0.4.0');
     clientStub.startError = undefined;
+    downloadStub.ensureError = undefined;
+    downloadStub.existing = undefined;
+    downloadStub.scans = 0;
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
     outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
@@ -257,5 +283,30 @@ describe('failures around the launch', () => {
         clientStub.startError = new Error('spawn failed');
 
         await expect(start(settingsFor(binaryPath))).rejects.toThrow('spawn failed');
+    });
+});
+
+describe('falling back when the bundled server cannot be ensured', () => {
+    it('uses an installed binary when a pinned version fails', async () => {
+        const binaryPath = writeBinary();
+        rememberVersion(binaryPath, 'v0.3.0');
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: binaryPath, version: 'v0.3.0' };
+
+        await start(settingsFor('', { importStrategy: 'useBundled', serverVersion: '0.4.0' }));
+
+        expect(downloadStub.scans).toBe(1);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(binaryPath);
+    });
+
+    it('does not scan again for latest, which already fell back inside ensureServer', async () => {
+        const binaryPath = writeBinary();
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: binaryPath, version: 'v0.3.0' };
+
+        await expect(start(settingsFor('', { importStrategy: 'useBundled', serverVersion: 'latest' }))).rejects.toThrow(
+            'offline'
+        );
+        expect(downloadStub.scans).toBe(0);
     });
 });

@@ -360,7 +360,12 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         return cachedEtag.tag;
     }
 
-    if (status === 403 || status === 429) {
+    const isRateLimited =
+        status === 429 ||
+        (status === 403 &&
+            (headerValue(response.headers, 'x-ratelimit-remaining') === '0' ||
+                headerValue(response.headers, 'retry-after') !== undefined));
+    if (isRateLimited) {
         response.resume();
         const retryAt = rateLimitRetryTime(response.headers, Date.now());
         await context.globalState.update(API_BACKOFF_KEY, retryAt);
@@ -453,6 +458,18 @@ async function renameWithRetry(from: string, to: string, attempts = 5): Promise<
     }
 }
 
+/**
+ * When a directory last changed. Its own mtime does not change while a file in
+ * it is still being written, so go by the newest thing inside it too.
+ */
+async function newestMtime(dir: string): Promise<number> {
+    let newest = (await fs.stat(dir)).mtimeMs;
+    for (const child of await fs.readdir(dir)) {
+        newest = Math.max(newest, (await fs.stat(path.join(dir, child))).mtimeMs);
+    }
+    return newest;
+}
+
 /** Remove staging directories left behind by installs that never finished. */
 async function removeStaleStagingDirs(libsRoot: string): Promise<void> {
     let entries: string[];
@@ -467,19 +484,42 @@ async function removeStaleStagingDirs(libsRoot: string): Promise<void> {
         }
         const dir = path.join(libsRoot, entry);
         try {
-            // The directory's own mtime does not change while the archive in it is
-            // still being written, so go by the newest thing inside it.
-            let newest = (await fs.stat(dir)).mtimeMs;
-            for (const child of await fs.readdir(dir)) {
-                newest = Math.max(newest, (await fs.stat(path.join(dir, child))).mtimeMs);
-            }
-            if (Date.now() - newest > STALE_STAGING_MS) {
+            if (Date.now() - (await newestMtime(dir)) > STALE_STAGING_MS) {
                 await fs.remove(dir);
                 logger.info(`Removed abandoned staging directory ${dir}`);
             }
         } catch {
             // Another window may have removed it already.
         }
+    }
+}
+
+/**
+ * Remove installed versions other than `keep` and the newest one besides it,
+ * so disk use does not grow with every release. Each directory is moved aside
+ * before it is removed; on Windows that fails while another window is running
+ * the binary inside it, and such directories are left alone.
+ */
+async function pruneOldVersions(context: vscode.ExtensionContext, keep: string): Promise<void> {
+    const libsRoot = getLibsRoot(context);
+    let entries: string[];
+    try {
+        entries = await fs.readdir(libsRoot);
+    } catch {
+        return;
+    }
+    const others = entries.filter((entry) => !entry.startsWith('.') && entry !== keep).sort(compareVersionsDesc);
+    for (const entry of others.slice(1)) {
+        const dir = path.join(libsRoot, entry);
+        const discardDir = path.join(libsRoot, `.staging-${entry}-${crypto.randomBytes(6).toString('hex')}-discard`);
+        try {
+            await fs.rename(dir, discardDir);
+        } catch (err) {
+            logger.info(`Keeping old install ${dir}, which could not be moved: ${err}`);
+            continue;
+        }
+        await fs.remove(discardDir).catch((err) => logger.warn(`Could not remove ${discardDir}: ${err}`));
+        logger.info(`Removed old install ${dir}`);
     }
 }
 
@@ -551,11 +591,16 @@ async function downloadServer(
             logger.info('Made executable');
         }
 
-        if ((await fsapi.pathExists(versionedDir)) && !(await fsapi.pathExists(executablePath))) {
-            // A leftover directory without the executable is in the way. Renaming onto
-            // it fails with EPERM on Windows, so clear it first. Move it aside rather
+        if (
+            (await fsapi.pathExists(versionedDir)) &&
+            !(await fsapi.pathExists(executablePath)) &&
+            Date.now() - (await newestMtime(versionedDir).catch(() => Date.now())) > STALE_STAGING_MS
+        ) {
+            // A long-abandoned directory without the executable is in the way. Renaming
+            // onto it fails with EPERM on Windows, so clear it first. Move it aside rather
             // than deleting in place, so an install another window finished just now
-            // is never removed.
+            // is never removed. A recently changed one may be another window's install
+            // landing, so it is left alone.
             const discardDir = `${stagingDir}-discard`;
             try {
                 await renameWithRetry(versionedDir, discardDir);
@@ -582,6 +627,7 @@ async function downloadServer(
         }
 
         progress(`Hydrust Server ${resolvedVersion} installed successfully`);
+        await pruneOldVersions(context, path.basename(versionedDir));
         return executablePath;
     } catch (err) {
         logger.error(`Failed to download server: ${err}`);
