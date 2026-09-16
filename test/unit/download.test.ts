@@ -556,6 +556,29 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
         expect(stub.globalState.has(versionLastUsedKey('0.2.0'))).toBe(true);
     });
 
+    it('backs off after a 403 whose body reports a secondary rate limit', async () => {
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 403,
+            body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}',
+        });
+        publishRelease(FALLBACK_SERVER_VERSION);
+        const before = Date.now();
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(stub.globalState.get(API_BACKOFF_KEY)).toBeGreaterThanOrEqual(before + MIN_API_BACKOFF_MS);
+    });
+
+    it('spares the newest usable previous install rather than a newer broken directory', async () => {
+        installOnDisk('v0.2.0');
+        fs.mkdirSync(path.join(getLibsRoot(context), '0.2.5'), { recursive: true });
+        publishRelease('v0.3.0');
+
+        await ensure('v0.3.0');
+
+        expect(fs.readdirSync(getLibsRoot(context)).sort()).toEqual(['0.2.0', '0.3.0']);
+    });
+
     it('treats a 403 without rate-limit headers as an ordinary failure', async () => {
         net.routes.set(RELEASES_PAGE, 'network-error');
         net.routes.set(RELEASES_API, { status: 403, body: '{"message":"Forbidden"}' });

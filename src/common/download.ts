@@ -401,13 +401,19 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         return cachedEtag.tag;
     }
 
+    const body = await readBody(response).catch((err) => {
+        logger.warn(`Failed to read the GitHub releases API response: ${err}`);
+        return undefined;
+    });
+
+    // Secondary rate limits can return a 403 with neither header; only the body says so.
     const isRateLimited =
         status === 429 ||
         (status === 403 &&
             (headerValue(response.headers, 'x-ratelimit-remaining') === '0' ||
-                headerValue(response.headers, 'retry-after') !== undefined));
+                headerValue(response.headers, 'retry-after') !== undefined ||
+                /rate limit/i.test(body ?? '')));
     if (isRateLimited) {
-        response.resume();
         const retryAt = rateLimitRetryTime(response.headers, Date.now());
         await context.globalState.update(API_BACKOFF_KEY, retryAt);
         logger.warn(
@@ -417,10 +423,6 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         return undefined;
     }
 
-    const body = await readBody(response).catch((err) => {
-        logger.warn(`Failed to read the GitHub releases API response: ${err}`);
-        return undefined;
-    });
     if (body === undefined) {
         return undefined;
     }
@@ -552,7 +554,15 @@ async function pruneOldVersions(context: vscode.ExtensionContext, keep: string):
         return;
     }
     const others = entries.filter((entry) => !entry.startsWith('.') && entry !== keep).sort(compareVersionsDesc);
-    for (const entry of others.slice(1)) {
+    // Spare the newest usable install, not merely the newest directory.
+    let spared: string | undefined;
+    for (const entry of others) {
+        if (await fsapi.pathExists(getExecutablePath(context, entry))) {
+            spared = entry;
+            break;
+        }
+    }
+    for (const entry of others.filter((entry) => entry !== spared)) {
         // Read just before deciding, so a use recorded by another window between
         // entries in this loop is not missed.
         const lastUsed = context.globalState.get<number>(versionLastUsedKey(entry)) ?? 0;
