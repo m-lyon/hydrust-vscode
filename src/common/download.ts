@@ -36,6 +36,9 @@ export const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 /** Shortest backoff after a rate-limit response, as GitHub's guidance asks. */
 export const MIN_API_BACKOFF_MS = 60_000;
 
+/** Longest backoff honoured, so a bogus header cannot disable the API indefinitely. */
+export const MAX_API_BACKOFF_MS = 60 * 60 * 1000;
+
 /** Staging directories older than this are assumed abandoned by a closed or crashed window. */
 export const STALE_STAGING_MS = 60 * 60 * 1000;
 
@@ -325,6 +328,10 @@ async function resolveLatestFromRedirect(): Promise<string | undefined> {
  * quota is spent, and otherwise at least a minute.
  */
 export function rateLimitRetryTime(headers: IncomingHttpHeaders, now: number): number {
+    return Math.min(uncappedRetryTime(headers, now), now + MAX_API_BACKOFF_MS);
+}
+
+function uncappedRetryTime(headers: IncomingHttpHeaders, now: number): number {
     const retryAfter = Number(headerValue(headers, 'retry-after'));
     if (Number.isFinite(retryAfter) && retryAfter > 0) {
         return now + retryAfter * 1000;
@@ -479,12 +486,15 @@ async function renameWithRetry(from: string, to: string, attempts = 5): Promise<
 
 /**
  * When a directory last changed. Its own mtime does not change while a file in
- * it is still being written, so go by the newest thing inside it too.
+ * it is still being written, so go by the newest thing anywhere inside it.
  */
 async function newestMtime(dir: string): Promise<number> {
-    let newest = (await fs.stat(dir)).mtimeMs;
-    for (const child of await fs.readdir(dir)) {
-        newest = Math.max(newest, (await fs.stat(path.join(dir, child))).mtimeMs);
+    const stats = await fs.lstat(dir);
+    let newest = stats.mtimeMs;
+    if (stats.isDirectory()) {
+        for (const child of await fs.readdir(dir)) {
+            newest = Math.max(newest, await newestMtime(path.join(dir, child)));
+        }
     }
     return newest;
 }
@@ -684,6 +694,8 @@ function normaliseTag(version: string): string {
 /** Use the installed binary for a tag, downloading it first if needed. */
 async function installVersion(tag: string, context: vscode.ExtensionContext): Promise<InstalledServer> {
     const executablePath = getExecutablePath(context, tag);
+    // Mark before checking, so another window cannot prune it between the check and use.
+    await markVersionUsed(context, tag);
     if (await fsapi.pathExists(executablePath)) {
         logger.info(`Binary for version ${tag} already exists`);
         return { path: executablePath, version: tag };
@@ -736,6 +748,7 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
     const cached = context.globalState.get<CachedLatestTag>(LATEST_TAG_CACHE_KEY);
     if (cached && Date.now() - cached.checkedAt < LATEST_TAG_TTL_MS) {
         const executablePath = getExecutablePath(context, cached.tag);
+        await markVersionUsed(context, cached.tag);
         if (await fsapi.pathExists(executablePath)) {
             logger.info(`Using ${cached.tag}, resolved as the latest release within the last day.`);
             return { path: executablePath, version: cached.tag };
@@ -748,12 +761,14 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
         return installed;
     };
 
+    let firstError: unknown;
     const redirectTag = await resolveLatestFromRedirect();
     if (redirectTag) {
         try {
             return await useResolved(redirectTag);
         } catch (err) {
             if (!(err instanceof AssetNotFoundError)) {
+                firstError = err;
                 logger.warn(`Could not install ${redirectTag}: ${err}`);
             } else {
                 logger.info(`Release ${redirectTag} has no archive for this platform; looking for an older one.`);
@@ -766,18 +781,30 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
         try {
             return await useResolved(apiTag);
         } catch (err) {
+            firstError ??= err;
             logger.warn(`Could not install ${apiTag}: ${err}`);
         }
     }
 
     const existing = await findExistingExecutable(context);
     if (existing) {
+        await markVersionUsed(context, existing.version);
         logger.warn(`Could not resolve the latest release; using the installed ${existing.version} instead.`);
         return existing;
     }
 
     logger.warn(`Could not resolve the latest release; installing the fallback ${FALLBACK_SERVER_VERSION} instead.`);
-    return await installVersion(FALLBACK_SERVER_VERSION, context);
+    try {
+        return await installVersion(FALLBACK_SERVER_VERSION, context);
+    } catch (err) {
+        if (firstError === undefined) {
+            throw err;
+        }
+        throw new Error(
+            `Could not install the fallback ${FALLBACK_SERVER_VERSION} (${err}) ` +
+            `after the latest release failed to install (${firstError})`
+        );
+    }
 }
 
 /**

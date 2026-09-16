@@ -88,6 +88,7 @@ import {
     API_ETAG_CACHE_KEY,
     LATEST_TAG_CACHE_KEY,
     LATEST_TAG_TTL_MS,
+    MAX_API_BACKOFF_MS,
     MIN_API_BACKOFF_MS,
     PRUNE_UNUSED_MS,
     STALE_STAGING_MS,
@@ -329,6 +330,32 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
         await expect(ensure()).rejects.toThrow();
     });
 
+    it('reports why the latest release failed when the fallback download fails too', async () => {
+        stub.globalState.set(API_BACKOFF_KEY, Date.now() + 600_000);
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.9.0'));
+        net.routes.set(assetUrl('v0.9.0'), 'timeout');
+        net.routes.set(assetUrl(FALLBACK_SERVER_VERSION), 'timeout');
+
+        const error = await ensure().catch((err: Error) => err);
+
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain(`fallback ${FALLBACK_SERVER_VERSION}`);
+        expect((error as Error).message).toContain(assetUrl('v0.9.0'));
+        expect(stub.logs.some((line) => line.includes('Could not install v0.9.0'))).toBe(true);
+        expect(stub.logs.some((line) => line.includes('rate limited until'))).toBe(true);
+        expect(requested(RELEASES_API)).toBe(0);
+    });
+
+    it('marks an already installed version used before handing out its path', async () => {
+        installOnDisk('v0.3.0');
+        const stale = Date.now() - PRUNE_UNUSED_MS - 60_000;
+        stub.globalState.set(versionLastUsedKey('0.3.0'), stale);
+
+        await ensure('v0.3.0');
+
+        expect(stub.globalState.get(versionLastUsedKey('0.3.0'))).toBeGreaterThan(stale);
+    });
+
     it('uses an explicitly configured version without resolving anything', async () => {
         const executable = installOnDisk('v0.3.0');
 
@@ -557,6 +584,12 @@ describe('rateLimitRetryTime', () => {
         expect(rateLimitRetryTime({}, now)).toBe(now + MIN_API_BACKOFF_MS);
         expect(rateLimitRetryTime({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000) }, now))
             .toBe(now + MIN_API_BACKOFF_MS);
+    });
+
+    it('never backs off longer than the cap', () => {
+        expect(rateLimitRetryTime({ 'retry-after': '99999999' }, now)).toBe(now + MAX_API_BACKOFF_MS);
+        expect(rateLimitRetryTime({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 86_400 * 365) }, now))
+            .toBe(now + MAX_API_BACKOFF_MS);
     });
 });
 
