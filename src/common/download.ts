@@ -207,13 +207,17 @@ async function verifyChecksum(filePath: string, checksumUrl: string): Promise<bo
 
         return isValid;
     } catch (err) {
+        // Only a release that publishes no checksum file is installed unverified.
+        // Timeouts, network errors and server errors fail the install.
+        if (!(err instanceof AssetNotFoundError)) {
+            throw err;
+        }
         logger.warn(`Failed to verify checksum: ${err}`);
         notifyDeveloper(
-            `Checksum verification was skipped because the checksum file could not be fetched (${checksumUrl}).`,
+            `Checksum verification was skipped because the release has no checksum file (${checksumUrl}).`,
             'Error:',
             err
         );
-        // Don't fail the download if checksum verification fails
         return true;
     }
 }
@@ -631,7 +635,10 @@ async function downloadServer(
             await renameWithRetry(stagingDir, versionedDir);
         } catch (err) {
             if (!(await fsapi.pathExists(executablePath))) {
-                throw err;
+                throw new Error(
+                    `Could not install ${resolvedVersion}: ${versionedDir} already exists without the server ` +
+                    `executable and could not be replaced. Remove that directory and try again. (${err})`
+                );
             }
             // Another window finished installing this version first.
             logger.info(`Version ${resolvedVersion} was installed concurrently; using that install.`);
@@ -762,6 +769,16 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
 }
 
 /**
+ * Record that this window is using a version, so other windows do not prune it.
+ * Called whenever the server is (re)started, including from a fallback binary.
+ */
+export async function markVersionUsed(context: vscode.ExtensionContext, version: string): Promise<void> {
+    const dir = path.basename(getVersionedDir(context, version));
+    const lastUsed = context.globalState.get<Record<string, number>>(VERSION_LAST_USED_KEY) ?? {};
+    await context.globalState.update(VERSION_LAST_USED_KEY, { ...lastUsed, [dir]: Date.now() });
+}
+
+/**
  * Singleton guard: while a server is being resolved or downloaded, every
  * concurrent caller awaits the same promise rather than starting its own.
  */
@@ -786,9 +803,7 @@ export function ensureServer(
 
     const work = key === 'latest' ? ensureLatest(context) : installVersion(key, context);
     const shared = work.then(async (installed) => {
-        const lastUsed = context.globalState.get<Record<string, number>>(VERSION_LAST_USED_KEY) ?? {};
-        const dir = path.basename(getVersionedDir(context, installed.version));
-        await context.globalState.update(VERSION_LAST_USED_KEY, { ...lastUsed, [dir]: Date.now() });
+        await markVersionUsed(context, installed.version);
         return installed;
     }).finally(() => {
         inFlight.delete(key);

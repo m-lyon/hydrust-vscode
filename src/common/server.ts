@@ -4,7 +4,7 @@ import which from 'which';
 import { logger } from './logger';
 import { BINARY_NAME } from './constants';
 import { ExtensionSettings } from './settings';
-import { ensureServer, findExistingExecutable } from './download';
+import { ensureServer, findExistingExecutable, markVersionUsed } from './download';
 import { ResolvedBinary, ServerCompat } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
@@ -68,6 +68,7 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
         const cached = isLatest ? undefined : await findExistingExecutable(context);
         if (cached) {
             logger.warn(`Falling back to previously installed binary: ${cached.path}`);
+            await markVersionUsed(context, cached.version);
             return { path: cached.path, source: 'bundled', version: cached.version };
         }
         logger.error('No previously installed binary available to fall back to.');

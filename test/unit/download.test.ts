@@ -450,8 +450,23 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
         const recent = path.join(getLibsRoot(context), '0.3.0', 'in-progress');
         fs.mkdirSync(recent, { recursive: true });
 
-        await expect(ensure('v0.3.0')).rejects.toThrow();
+        await expect(ensure('v0.3.0')).rejects.toThrow('already exists without the server executable');
         expect(fs.existsSync(recent)).toBe(true);
+    });
+
+    it('fails the install when the checksum request times out', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(`${assetUrl('v0.3.0')}.sha256`, 'timeout');
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('timed out');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
+    });
+
+    it('installs without verification when the release has no checksum file', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(`${assetUrl('v0.3.0')}.sha256`, { status: 404 });
+
+        await expect(ensure('v0.3.0')).resolves.toMatchObject({ version: 'v0.3.0' });
     });
 
     it('keeps only the new install and the newest previous one', async () => {
