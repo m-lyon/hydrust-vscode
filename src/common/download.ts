@@ -39,6 +39,12 @@ export const MIN_API_BACKOFF_MS = 60_000;
 /** Staging directories older than this are assumed abandoned by a closed or crashed window. */
 export const STALE_STAGING_MS = 60 * 60 * 1000;
 
+/** globalState key mapping each installed version directory to when a window last used it. */
+export const VERSION_LAST_USED_KEY = 'hydrust.serverVersionsLastUsed.v1';
+
+/** Installed versions used by any window more recently than this are never pruned. */
+export const PRUNE_UNUSED_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** Release tags that are safe to use in file paths and shell commands. */
 const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
 
@@ -496,7 +502,9 @@ async function removeStaleStagingDirs(libsRoot: string): Promise<void> {
 
 /**
  * Remove installed versions other than `keep` and the newest one besides it,
- * so disk use does not grow with every release. Each directory is moved aside
+ * so disk use does not grow with every release. Versions any window used
+ * recently are kept, since all windows share this storage and another window
+ * may still be running one of them. Each directory is moved aside
  * before it is removed; on Windows that fails while another window is running
  * the binary inside it, and such directories are left alone.
  */
@@ -508,8 +516,12 @@ async function pruneOldVersions(context: vscode.ExtensionContext, keep: string):
     } catch {
         return;
     }
+    const lastUsed = context.globalState.get<Record<string, number>>(VERSION_LAST_USED_KEY) ?? {};
     const others = entries.filter((entry) => !entry.startsWith('.') && entry !== keep).sort(compareVersionsDesc);
     for (const entry of others.slice(1)) {
+        if (Date.now() - (lastUsed[entry] ?? 0) < PRUNE_UNUSED_MS) {
+            continue;
+        }
         const dir = path.join(libsRoot, entry);
         const discardDir = path.join(libsRoot, `.staging-${entry}-${crypto.randomBytes(6).toString('hex')}-discard`);
         try {
@@ -773,7 +785,12 @@ export function ensureServer(
     }
 
     const work = key === 'latest' ? ensureLatest(context) : installVersion(key, context);
-    const shared = work.finally(() => {
+    const shared = work.then(async (installed) => {
+        const lastUsed = context.globalState.get<Record<string, number>>(VERSION_LAST_USED_KEY) ?? {};
+        const dir = path.basename(getVersionedDir(context, installed.version));
+        await context.globalState.update(VERSION_LAST_USED_KEY, { ...lastUsed, [dir]: Date.now() });
+        return installed;
+    }).finally(() => {
         inFlight.delete(key);
     });
     inFlight.set(key, shared);

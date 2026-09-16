@@ -89,7 +89,9 @@ import {
     LATEST_TAG_CACHE_KEY,
     LATEST_TAG_TTL_MS,
     MIN_API_BACKOFF_MS,
+    PRUNE_UNUSED_MS,
     STALE_STAGING_MS,
+    VERSION_LAST_USED_KEY,
     ensureServer,
     rateLimitRetryTime,
 } from '../../src/common/download';
@@ -461,6 +463,22 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
         await ensure('v0.3.0');
 
         expect(fs.readdirSync(getLibsRoot(context)).sort()).toEqual(['0.2.5', '0.3.0']);
+    });
+
+    it('keeps a version another window used recently when installing a different one', async () => {
+        installOnDisk('v0.1.0');
+        await ensure('v0.1.0');
+        installOnDisk('v0.2.0');
+        installOnDisk('v0.2.5');
+        stub.globalState.set(VERSION_LAST_USED_KEY, {
+            ...(stub.globalState.get(VERSION_LAST_USED_KEY) as Record<string, number>),
+            '0.2.0': Date.now() - PRUNE_UNUSED_MS - 60_000,
+        });
+        publishRelease('v0.3.0');
+
+        await ensure('v0.3.0');
+
+        expect(fs.readdirSync(getLibsRoot(context)).sort()).toEqual(['0.1.0', '0.2.5', '0.3.0']);
     });
 
     it('treats a 403 without rate-limit headers as an ordinary failure', async () => {
