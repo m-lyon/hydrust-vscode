@@ -92,9 +92,13 @@ vi.mock('vscode-languageclient/node', () => {
         async stop(): Promise<void> {
             // Nothing to tear down.
         }
+
+        onDidChangeState(): { dispose(): void } {
+            return { dispose() {} };
+        }
     }
 
-    return { LanguageClient };
+    return { LanguageClient, State: { Stopped: 1, Starting: 3, Running: 2 } };
 });
 
 import { startServer } from '../../src/common/server';

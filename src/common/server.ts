@@ -13,7 +13,11 @@ import {
     LanguageClientOptions,
     ServerOptions,
     Executable,
+    State,
 } from 'vscode-languageclient/node';
+
+/** How often a running bundled server re-records its version as used, so other windows do not prune it. */
+const MARK_USED_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * A running server, together with what the extension knows about what it
@@ -138,6 +142,21 @@ export async function startServer(
 
     // Create and start the client
     const client = new LanguageClient(serverId, serverName, serverOptions, clientOptions);
+
+    const bundledVersion = binary.source === 'bundled' ? binary.version : undefined;
+    if (bundledVersion) {
+        let refresh: NodeJS.Timeout | undefined;
+        const markUsed = () => void markVersionUsed(context, bundledVersion).catch((err) => logger.debug(`Could not record server use: ${err}`));
+        client.onDidChangeState(({ newState }) => {
+            if (newState === State.Running) {
+                markUsed();
+                refresh ??= setInterval(markUsed, MARK_USED_INTERVAL_MS);
+            } else if (newState === State.Stopped && refresh) {
+                clearInterval(refresh);
+                refresh = undefined;
+            }
+        });
+    }
 
     try {
         await client.start();

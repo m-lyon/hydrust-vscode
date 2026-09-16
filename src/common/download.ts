@@ -27,6 +27,12 @@ export const API_BACKOFF_KEY = 'hydrust.githubApiBackoffUntil.v1';
 /** globalState key holding the ETag of the last releases listing and the tag picked from it. */
 export const API_ETAG_CACHE_KEY = 'hydrust.githubReleasesEtag.v1';
 
+/** globalState key holding the tag whose install last failed, and when. */
+export const FAILED_INSTALL_KEY = 'hydrust.failedServerInstall.v1';
+
+/** How long a tag that failed to install is skipped when resolving `latest`. */
+export const FAILED_INSTALL_TTL_MS = 60 * 60 * 1000;
+
 /** Timeout for the small metadata requests made while resolving a version. */
 export const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -430,7 +436,12 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         return undefined;
     }
 
-    for (const release of releases) {
+    const newestFirst = [...releases].sort((a, b) =>
+        typeof a?.tag_name === 'string' && typeof b?.tag_name === 'string'
+            ? compareVersionsDesc(a.tag_name.replace(/^v/, ''), b.tag_name.replace(/^v/, ''))
+            : 0
+    );
+    for (const release of newestFirst) {
         if (
             release.draft ||
             release.prerelease ||
@@ -695,7 +706,7 @@ function normaliseTag(version: string): string {
 async function installVersion(tag: string, context: vscode.ExtensionContext): Promise<InstalledServer> {
     const executablePath = getExecutablePath(context, tag);
     // Mark before checking, so another window cannot prune it between the check and use.
-    await markVersionUsed(context, tag);
+    const usedAt = await markVersionUsed(context, tag);
     if (await fsapi.pathExists(executablePath)) {
         logger.info(`Binary for version ${tag} already exists`);
         return { path: executablePath, version: tag };
@@ -729,7 +740,7 @@ async function installVersion(tag: string, context: vscode.ExtensionContext): Pr
         return { path: installedPath, version: tag };
     } catch (err) {
         if (!(await fsapi.pathExists(executablePath))) {
-            await forgetVersionUsed(context, tag);
+            await forgetVersionUsed(context, tag, usedAt);
         }
         throw err;
     } finally {
@@ -753,16 +764,28 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
     const cached = context.globalState.get<CachedLatestTag>(LATEST_TAG_CACHE_KEY);
     if (cached && Date.now() - cached.checkedAt < LATEST_TAG_TTL_MS) {
         const executablePath = getExecutablePath(context, cached.tag);
-        await markVersionUsed(context, cached.tag);
+        const usedAt = await markVersionUsed(context, cached.tag);
         if (await fsapi.pathExists(executablePath)) {
             logger.info(`Using ${cached.tag}, resolved as the latest release within the last day.`);
             return { path: executablePath, version: cached.tag };
         }
-        await forgetVersionUsed(context, cached.tag);
+        await forgetVersionUsed(context, cached.tag, usedAt);
     }
 
     const useResolved = async (tag: string): Promise<InstalledServer> => {
-        const installed = await installVersion(tag, context);
+        const failed = context.globalState.get<CachedLatestTag>(FAILED_INSTALL_KEY);
+        if (failed?.tag === tag && Date.now() - failed.checkedAt < FAILED_INSTALL_TTL_MS) {
+            throw new Error(`installing ${tag} failed recently; not retrying yet`);
+        }
+        let installed: InstalledServer;
+        try {
+            installed = await installVersion(tag, context);
+        } catch (err) {
+            if (!(err instanceof AssetNotFoundError)) {
+                await context.globalState.update(FAILED_INSTALL_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
+            }
+            throw err;
+        }
         await context.globalState.update(LATEST_TAG_CACHE_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
         return installed;
     };
@@ -813,18 +836,26 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
     }
 }
 
-/** Drop the last-used record for a version that turned out not to be installed. */
-async function forgetVersionUsed(context: vscode.ExtensionContext, version: string): Promise<void> {
-    await context.globalState.update(versionLastUsedKey(path.basename(getVersionedDir(context, version))), undefined);
+/**
+ * Drop the last-used record for a version that turned out not to be installed,
+ * unless another window has since recorded its own use of it.
+ */
+async function forgetVersionUsed(context: vscode.ExtensionContext, version: string, usedAt: number): Promise<void> {
+    const key = versionLastUsedKey(path.basename(getVersionedDir(context, version)));
+    if (context.globalState.get<number>(key) === usedAt) {
+        await context.globalState.update(key, undefined);
+    }
 }
 
 /**
  * Record that this window is using a version, so other windows do not prune it.
  * Called whenever the server is (re)started, including from a fallback binary.
  */
-export async function markVersionUsed(context: vscode.ExtensionContext, version: string): Promise<void> {
+export async function markVersionUsed(context: vscode.ExtensionContext, version: string): Promise<number> {
     const dir = path.basename(getVersionedDir(context, version));
-    await context.globalState.update(versionLastUsedKey(dir), Date.now());
+    const usedAt = Date.now();
+    await context.globalState.update(versionLastUsedKey(dir), usedAt);
+    return usedAt;
 }
 
 /**

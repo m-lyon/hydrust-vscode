@@ -21,9 +21,23 @@ export const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
 
 const PIN_PATTERN = /(export const FALLBACK_SERVER_VERSION = ')[^']*(';)/;
 
-/** The first stable release, in the API's newest-first order, with every platform archive. */
+/** Compare two tags by their numeric version segments, newest first. */
+export function compareTagsDesc(a, b) {
+    const segs = (tag) => tag.replace(/^v/, '').split(/[.-]/).slice(0, 3).map((s) => parseInt(s, 10));
+    const [x, y] = [segs(a), segs(b)];
+    for (let i = 0; i < 3; i++) {
+        if (x[i] !== y[i]) {
+            return y[i] - x[i];
+        }
+    }
+    return 0;
+}
+
+/** The highest stable release, by version, with every platform archive. */
 export function pickPinnableRelease(releases) {
-    for (const release of releases) {
+    const eligible = releases.filter((release) => typeof release.tag_name === 'string' && TAG_PATTERN.test(release.tag_name));
+    eligible.sort((a, b) => compareTagsDesc(a.tag_name, b.tag_name));
+    for (const release of eligible) {
         if (release.draft || release.prerelease || typeof release.tag_name !== 'string' || !TAG_PATTERN.test(release.tag_name) || !Array.isArray(release.assets)) {
             continue;
         }
@@ -59,6 +73,10 @@ async function main() {
     }
 
     const source = await readFile(constantsPath, 'utf8');
+    const current = source.match(PIN_PATTERN)?.[0].match(/'([^']*)'/)?.[1];
+    if (current && TAG_PATTERN.test(current) && compareTagsDesc(tag, current) > 0) {
+        throw new Error(`Refusing to lower FALLBACK_SERVER_VERSION from ${current} to ${tag}`);
+    }
     await writeFile(constantsPath, rewritePin(source, tag));
     console.log(`FALLBACK_SERVER_VERSION pinned to ${tag}`);
 }
