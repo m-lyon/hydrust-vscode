@@ -448,8 +448,13 @@ async function removeStaleStagingDirs(libsRoot: string): Promise<void> {
         }
         const dir = path.join(libsRoot, entry);
         try {
-            const stats = await fs.stat(dir);
-            if (Date.now() - stats.mtimeMs > STALE_STAGING_MS) {
+            // The directory's own mtime does not change while the archive in it is
+            // still being written, so go by the newest thing inside it.
+            let newest = (await fs.stat(dir)).mtimeMs;
+            for (const child of await fs.readdir(dir)) {
+                newest = Math.max(newest, (await fs.stat(path.join(dir, child))).mtimeMs);
+            }
+            if (Date.now() - newest > STALE_STAGING_MS) {
                 await fs.remove(dir);
                 logger.info(`Removed abandoned staging directory ${dir}`);
             }
@@ -523,7 +528,7 @@ async function downloadServer(
 
         // Make executable on Unix systems
         if (!isWindows()) {
-            await execAsync(`chmod +x "${stagingExecutablePath}"`);
+            await fs.chmod(stagingExecutablePath, 0o755);
             logger.info('Made executable');
         }
 
@@ -678,6 +683,9 @@ export function ensureServer(
     context: vscode.ExtensionContext
 ): Promise<InstalledServer> {
     const key = version === 'latest' || !version ? 'latest' : normaliseTag(version);
+    if (key !== 'latest' && !TAG_PATTERN.test(key)) {
+        return Promise.reject(new Error(`Invalid hydrust.serverVersion ${JSON.stringify(version)}: expected 'latest' or a version like 0.4.2`));
+    }
     const existing = inFlight.get(key);
     if (existing) {
         logger.info('Server resolution already in progress, waiting for it to complete...');

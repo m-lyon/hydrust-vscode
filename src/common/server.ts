@@ -63,7 +63,9 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
         // unexpected payload, etc.). Before giving up, look for a previously
         // downloaded binary on disk so the extension can still start.
         logger.warn(`ensureServer failed: ${err}`);
-        const cached = await findExistingExecutable(context);
+        // `latest` already falls back to installed binaries inside ensureServer.
+        const isLatest = settings.serverVersion === 'latest' || !settings.serverVersion;
+        const cached = isLatest ? undefined : await findExistingExecutable(context);
         if (cached) {
             logger.warn(`Falling back to previously installed binary: ${cached.path}`);
             return { path: cached.path, source: 'bundled', version: cached.version };

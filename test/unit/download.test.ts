@@ -370,6 +370,11 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
         expect(net.calls.some((call) => call.url.includes('escape') && call.url !== RELEASES_PAGE)).toBe(false);
     });
 
+    it('rejects a configured version that is not a plain version', async () => {
+        await expect(ensure('../escape')).rejects.toThrow('Invalid hydrust.serverVersion');
+        expect(net.calls).toEqual([]);
+    });
+
     it('shares one resolution between concurrent callers', async () => {
         installOnDisk('v0.4.2');
         net.routes.set(RELEASES_PAGE, redirectTo('v0.4.2'));

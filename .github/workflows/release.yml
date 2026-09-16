@@ -50,6 +50,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/pin-server-version.mjs
 
+      - name: Type-check pinned constants
+        run: npx tsc --noEmit
+
       - name: Package extension
         run: npx vsce package
 

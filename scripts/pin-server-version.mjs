@@ -16,12 +16,15 @@ export const PLATFORM_ASSETS = [
     'hydra-lsp-x86_64-unknown-linux-gnu.tar.xz',
 ];
 
+/** Must match TAG_PATTERN in src/common/download.ts. */
+const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
+
 const PIN_PATTERN = /(export const FALLBACK_SERVER_VERSION = ')[^']*(';)/;
 
 /** The first stable release, in the API's newest-first order, with every platform archive. */
 export function pickPinnableRelease(releases) {
     for (const release of releases) {
-        if (release.draft || release.prerelease || !release.tag_name || !Array.isArray(release.assets)) {
+        if (release.draft || release.prerelease || typeof release.tag_name !== 'string' || !TAG_PATTERN.test(release.tag_name) || !Array.isArray(release.assets)) {
             continue;
         }
         const names = new Set(release.assets.map((asset) => asset.name));
