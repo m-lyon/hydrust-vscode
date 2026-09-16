@@ -436,19 +436,11 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         return undefined;
     }
 
-    const newestFirst = [...releases].sort((a, b) =>
-        typeof a?.tag_name === 'string' && typeof b?.tag_name === 'string'
-            ? compareVersionsDesc(a.tag_name.replace(/^v/, ''), b.tag_name.replace(/^v/, ''))
-            : 0
-    );
+    const newestFirst = releases
+        .filter((release) => typeof release?.tag_name === 'string' && TAG_PATTERN.test(release.tag_name))
+        .sort((a, b) => compareVersionsDesc(a.tag_name.replace(/^v/, ''), b.tag_name.replace(/^v/, '')));
     for (const release of newestFirst) {
-        if (
-            release.draft ||
-            release.prerelease ||
-            typeof release.tag_name !== 'string' ||
-            !TAG_PATTERN.test(release.tag_name) ||
-            !Array.isArray(release.assets)
-        ) {
+        if (release.draft || release.prerelease || !Array.isArray(release.assets)) {
             continue;
         }
         const hasMatchingAsset = release.assets.some(
@@ -893,7 +885,7 @@ export function ensureServer(
  * Compare two version directory names (without 'v' prefix) descending.
  * Semver-aware on numeric segments; falls back to localeCompare for non-numeric tags.
  */
-function compareVersionsDesc(a: string, b: string): number {
+export function compareVersionsDesc(a: string, b: string): number {
     const parseSegs = (v: string): number[] | null => {
         const segs = v.split('.').map((s) => parseInt(s, 10));
         return segs.every((n) => Number.isFinite(n)) ? segs : null;

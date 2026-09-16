@@ -93,6 +93,7 @@ import {
     PRUNE_UNUSED_MS,
     STALE_STAGING_MS,
     TAG_PATTERN,
+    compareVersionsDesc,
     ensureServer,
     markVersionUsed,
     rateLimitRetryTime,
@@ -106,7 +107,7 @@ import {
     getLibsRoot,
     getPlatformInfo,
 } from '../../src/common/constants';
-import { PLATFORM_ASSETS, TAG_PATTERN as SCRIPT_TAG_PATTERN, pickPinnableRelease, rewritePin } from '../../scripts/pin-server-version.mjs';
+import { PLATFORM_ASSETS, TAG_PATTERN as SCRIPT_TAG_PATTERN, compareTagsDesc, pickPinnableRelease, rewritePin } from '../../scripts/pin-server-version.mjs';
 import { createStubExtensionContext, resetVscodeStub, stub } from '../stubs/vscode';
 
 const RELEASES_PAGE = 'https://github.com/m-lyon/hydra-lsp/releases/latest';
@@ -642,6 +643,14 @@ describe('the release pin script', () => {
     it('accepts exactly the tags the extension accepts', () => {
         expect(SCRIPT_TAG_PATTERN.source).toBe(TAG_PATTERN.source);
         expect(SCRIPT_TAG_PATTERN.flags).toBe(TAG_PATTERN.flags);
+    });
+
+    it('orders tags exactly as the extension does', () => {
+        const tags = ['v0.6.0', 'v0.6.0-hotfix.1', 'v0.10.0', 'v0.6.1', '0.6.0.1', 'v0.5.9-rc'];
+        const script = [...tags].sort(compareTagsDesc);
+        const extension = [...tags].sort((a, b) => compareVersionsDesc(a.replace(/^v/, ''), b.replace(/^v/, '')));
+        expect(script).toEqual(extension);
+        expect(script.indexOf('v0.6.0-hotfix.1')).toBeLessThan(script.indexOf('v0.6.0'));
     });
 
     it('rewrites the pin in constants.ts and nothing else', () => {

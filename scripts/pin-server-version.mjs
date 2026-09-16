@@ -21,16 +21,24 @@ export const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
 
 const PIN_PATTERN = /(export const FALLBACK_SERVER_VERSION = ')[^']*(';)/;
 
-/** Compare two tags by their numeric version segments, newest first. */
+/** Compare two tags newest first. Must match compareVersionsDesc in src/common/download.ts. */
 export function compareTagsDesc(a, b) {
-    const segs = (tag) => tag.replace(/^v/, '').split(/[.-]/).slice(0, 3).map((s) => parseInt(s, 10));
-    const [x, y] = [segs(a), segs(b)];
-    for (let i = 0; i < 3; i++) {
-        if (x[i] !== y[i]) {
-            return y[i] - x[i];
+    const [x, y] = [a.replace(/^v/, ''), b.replace(/^v/, '')];
+    const parseSegs = (v) => {
+        const segs = v.split('.').map((s) => parseInt(s, 10));
+        return segs.every((n) => Number.isFinite(n)) ? segs : null;
+    };
+    const [xSegs, ySegs] = [parseSegs(x), parseSegs(y)];
+    if (xSegs && ySegs) {
+        for (let i = 0; i < Math.max(xSegs.length, ySegs.length); i++) {
+            const diff = (ySegs[i] ?? 0) - (xSegs[i] ?? 0);
+            if (diff !== 0) {
+                return diff;
+            }
         }
+        return 0;
     }
-    return 0;
+    return y.localeCompare(x);
 }
 
 /** The highest stable release, by version, with every platform archive. */
@@ -38,7 +46,7 @@ export function pickPinnableRelease(releases) {
     const eligible = releases.filter((release) => typeof release.tag_name === 'string' && TAG_PATTERN.test(release.tag_name));
     eligible.sort((a, b) => compareTagsDesc(a.tag_name, b.tag_name));
     for (const release of eligible) {
-        if (release.draft || release.prerelease || typeof release.tag_name !== 'string' || !TAG_PATTERN.test(release.tag_name) || !Array.isArray(release.assets)) {
+        if (release.draft || release.prerelease || !Array.isArray(release.assets)) {
             continue;
         }
         const names = new Set(release.assets.map((asset) => asset.name));
