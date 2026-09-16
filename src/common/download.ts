@@ -36,6 +36,12 @@ export const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 /** Shortest backoff after a rate-limit response, as GitHub's guidance asks. */
 export const MIN_API_BACKOFF_MS = 60_000;
 
+/** Staging directories older than this are assumed abandoned by a closed or crashed window. */
+export const STALE_STAGING_MS = 60 * 60 * 1000;
+
+/** Release tags that are safe to use in file paths and shell commands. */
+const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
+
 const USER_AGENT = 'hydra-lsp-vscode';
 const MAX_REDIRECTS = 5;
 
@@ -117,7 +123,12 @@ function headerValue(headers: IncomingHttpHeaders, name: string): string | undef
 /**
  * Download a file from a URL, following redirects.
  */
-async function downloadFile(url: string, destPath: string, redirectsLeft = MAX_REDIRECTS): Promise<void> {
+async function downloadFile(
+    url: string,
+    destPath: string,
+    onStart?: () => void,
+    redirectsLeft = MAX_REDIRECTS
+): Promise<void> {
     const response = await request(url, { timeoutMs: DOWNLOAD_IDLE_TIMEOUT_MS });
     const status = response.statusCode ?? 0;
     const location = response.headers.location;
@@ -127,7 +138,7 @@ async function downloadFile(url: string, destPath: string, redirectsLeft = MAX_R
         if (redirectsLeft === 0) {
             throw new Error(`Too many redirects while downloading ${url}`);
         }
-        await downloadFile(new URL(location, url).toString(), destPath, redirectsLeft - 1);
+        await downloadFile(new URL(location, url).toString(), destPath, onStart, redirectsLeft - 1);
         return;
     }
 
@@ -141,6 +152,7 @@ async function downloadFile(url: string, destPath: string, redirectsLeft = MAX_R
         throw new Error(`Failed to download ${url}: ${status} ${response.statusMessage}`);
     }
 
+    onStart?.();
     try {
         await pipeline(response, fs.createWriteStream(destPath));
     } catch (err) {
@@ -276,6 +288,10 @@ async function resolveLatestFromRedirect(): Promise<string | undefined> {
             return undefined;
         }
         const tag = decodeURIComponent(match[1]);
+        if (!TAG_PATTERN.test(tag)) {
+            logger.warn(`Ignoring unexpected latest release tag from ${url}: ${JSON.stringify(tag)}`);
+            return undefined;
+        }
         logger.info(`Latest release resolved to ${tag} from the GitHub releases page.`);
         return tag;
     } catch (err) {
@@ -384,7 +400,13 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
     }
 
     for (const release of releases) {
-        if (release.draft || release.prerelease || !release.tag_name || !Array.isArray(release.assets)) {
+        if (
+            release.draft ||
+            release.prerelease ||
+            typeof release.tag_name !== 'string' ||
+            !TAG_PATTERN.test(release.tag_name) ||
+            !Array.isArray(release.assets)
+        ) {
             continue;
         }
         const hasMatchingAsset = release.assets.some(
@@ -412,6 +434,31 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
     return undefined;
 }
 
+/** Remove staging directories left behind by installs that never finished. */
+async function removeStaleStagingDirs(libsRoot: string): Promise<void> {
+    let entries: string[];
+    try {
+        entries = await fs.readdir(libsRoot);
+    } catch {
+        return;
+    }
+    for (const entry of entries) {
+        if (!entry.startsWith('.staging-')) {
+            continue;
+        }
+        const dir = path.join(libsRoot, entry);
+        try {
+            const stats = await fs.stat(dir);
+            if (Date.now() - stats.mtimeMs > STALE_STAGING_MS) {
+                await fs.remove(dir);
+                logger.info(`Removed abandoned staging directory ${dir}`);
+            }
+        } catch {
+            // Another window may have removed it already.
+        }
+    }
+}
+
 /**
  * Download and install the Hydrust Server binary.
  * `resolvedVersion` must already be a concrete, v-prefixed tag.
@@ -431,6 +478,8 @@ async function downloadServer(
     );
     const stagingExecutablePath = path.join(stagingDir, path.relative(versionedDir, getExecutablePath(context, resolvedVersion)));
 
+    await removeStaleStagingDirs(getLibsRoot(context));
+
     try {
         // Get platform info
         const platformInfo = getPlatformInfo();
@@ -448,8 +497,7 @@ async function downloadServer(
         const executablePath = getExecutablePath(context, resolvedVersion);
 
         // Download archive
-        progress(`Downloading Hydrust Server ${resolvedVersion}...`);
-        await downloadFile(downloadUrl, archivePath);
+        await downloadFile(downloadUrl, archivePath, () => progress(`Downloading Hydrust Server ${resolvedVersion}...`));
         logger.info(`Downloaded to: ${archivePath}`);
 
         // Verify checksum
@@ -482,12 +530,16 @@ async function downloadServer(
         try {
             await fs.rename(stagingDir, versionedDir);
         } catch (err) {
-            // Another window may have finished installing this version first.
-            if (!(await fsapi.pathExists(executablePath))) {
-                throw err;
+            if (await fsapi.pathExists(executablePath)) {
+                // Another window finished installing this version first.
+                logger.info(`Version ${resolvedVersion} was installed concurrently; using that install.`);
+                await fs.remove(stagingDir).catch(() => undefined);
+            } else {
+                // A leftover directory without the executable is in the way.
+                logger.warn(`Replacing incomplete install at ${versionedDir}: ${err}`);
+                await fs.remove(versionedDir);
+                await fs.rename(stagingDir, versionedDir);
             }
-            logger.info(`Version ${resolvedVersion} was installed concurrently; using that install.`);
-            await fs.remove(stagingDir).catch(() => undefined);
         }
 
         progress(`Hydrust Server ${resolvedVersion} installed successfully`);
@@ -522,19 +574,34 @@ async function installVersion(tag: string, context: vscode.ExtensionContext): Pr
     }
 
     logger.info(`Downloading Hydrust Server version: ${tag}`);
-    return await vscode.window.withProgress(
-        {
-            location: vscode.ProgressLocation.Notification,
-            title: 'Hydrust Server',
-            cancellable: false,
-        },
-        async (progress) => {
-            const installedPath = await downloadServer(tag, context, (message) => {
-                progress.report({ message });
-            });
-            return { path: installedPath, version: tag };
-        }
-    );
+
+    // The notification only opens once the archive is actually being served, so
+    // a release without this platform's archive does not flash one on every start.
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+        finish = resolve;
+    });
+    let notification: Promise<vscode.Progress<{ message?: string }>> | undefined;
+    const report = (message: string) => {
+        logger.info(message);
+        notification ??= new Promise((resolve) => {
+            void vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'Hydrust Server', cancellable: false },
+                (progress) => {
+                    resolve(progress);
+                    return finished;
+                }
+            );
+        });
+        void notification.then((progress) => progress.report({ message }));
+    };
+
+    try {
+        const installedPath = await downloadServer(tag, context, report);
+        return { path: installedPath, version: tag };
+    } finally {
+        finish();
+    }
 }
 
 /**

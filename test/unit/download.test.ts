@@ -71,6 +71,7 @@ import {
     LATEST_TAG_CACHE_KEY,
     LATEST_TAG_TTL_MS,
     MIN_API_BACKOFF_MS,
+    STALE_STAGING_MS,
     ensureServer,
     rateLimitRetryTime,
 } from '../../src/common/download';
@@ -319,6 +320,54 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
 
         await expect(ensure('v0.3.0')).rejects.toThrow('Checksum verification failed');
         expect(fs.existsSync(path.join(getLibsRoot(context), '0.3.0'))).toBe(false);
+    });
+
+    it('uses the install another window finished while this one was downloading', async () => {
+        publishRelease('v0.3.0');
+        const checksum = net.routes.get(`${assetUrl('v0.3.0')}.sha256`) as Reply;
+        net.routes.set(`${assetUrl('v0.3.0')}.sha256`, () => {
+            installOnDisk('v0.3.0');
+            return checksum;
+        });
+
+        const installed = await ensure('v0.3.0');
+
+        expect(fs.readFileSync(installed.path, 'utf8')).toBe('installed');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual(['0.3.0']);
+    });
+
+    it('replaces a leftover install directory that has no executable', async () => {
+        publishRelease('v0.3.0');
+        fs.mkdirSync(path.join(getLibsRoot(context), '0.3.0', 'leftover'), { recursive: true });
+
+        const installed = await ensure('v0.3.0');
+
+        expect(fs.readFileSync(installed.path, 'utf8')).toBe('#!/bin/sh\n');
+        expect(fs.existsSync(path.join(getLibsRoot(context), '0.3.0', 'leftover'))).toBe(false);
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual(['0.3.0']);
+    });
+
+    it('removes abandoned staging directories but leaves recent ones', async () => {
+        publishRelease('v0.3.0');
+        const stale = path.join(getLibsRoot(context), '.staging-0.2.0-stale');
+        const recent = path.join(getLibsRoot(context), '.staging-0.2.0-recent');
+        fs.mkdirSync(stale, { recursive: true });
+        fs.mkdirSync(recent, { recursive: true });
+        const old = new Date(Date.now() - STALE_STAGING_MS - 60_000);
+        fs.utimesSync(stale, old, old);
+
+        await ensure('v0.3.0');
+
+        expect(fs.existsSync(stale)).toBe(false);
+        expect(fs.existsSync(recent)).toBe(true);
+    });
+
+    it('ignores a latest tag that is not a plain version', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('%2E%2E%2Fescape'));
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(net.calls.some((call) => call.url.includes('escape') && call.url !== RELEASES_PAGE)).toBe(false);
     });
 
     it('shares one resolution between concurrent callers', async () => {
