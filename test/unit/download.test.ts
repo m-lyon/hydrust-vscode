@@ -86,6 +86,7 @@ vi.mock('https', async () => {
 import {
     API_BACKOFF_KEY,
     API_ETAG_CACHE_KEY,
+    FAILED_INSTALL_KEY,
     LATEST_TAG_CACHE_KEY,
     LATEST_TAG_TTL_MS,
     MAX_API_BACKOFF_MS,
@@ -326,6 +327,22 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
 
         await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.3.0' });
         expect(requested(assetUrl(FALLBACK_SERVER_VERSION))).toBe(0);
+    });
+
+    it('prefers an installed release over a newer installed prerelease when GitHub is unreachable', async () => {
+        const executable = installOnDisk('v0.5.0');
+        installOnDisk('v0.6.0-rc.1');
+
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.5.0' });
+    });
+
+    it('does not remember a timed out download as a failed install', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.9.0'));
+        net.routes.set(assetUrl('v0.9.0'), 'timeout');
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(stub.globalState.get(FAILED_INSTALL_KEY)).toBeUndefined();
     });
 
     it('fails when nothing can be resolved, downloaded or found on disk', async () => {

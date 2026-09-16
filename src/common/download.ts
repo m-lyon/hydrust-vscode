@@ -88,6 +88,9 @@ interface CachedReleasesEtag {
 /** The requested release does not have the file that was asked for. */
 class AssetNotFoundError extends Error {}
 
+/** A download failed for a reason that may not happen again, like a timeout or dropped connection. */
+class NetworkError extends Error {}
+
 /** The configured hydrust.serverVersion is not a valid version. */
 export class InvalidServerVersionError extends Error {}
 
@@ -162,7 +165,12 @@ async function downloadFile(
     onStart?: () => void,
     redirectsLeft = MAX_REDIRECTS
 ): Promise<void> {
-    const response = await request(url, { timeoutMs: DOWNLOAD_IDLE_TIMEOUT_MS });
+    let response: IncomingMessage;
+    try {
+        response = await request(url, { timeoutMs: DOWNLOAD_IDLE_TIMEOUT_MS });
+    } catch (err) {
+        throw new NetworkError(`${err instanceof Error ? err.message : err}`);
+    }
     const status = response.statusCode ?? 0;
     const location = response.headers.location;
 
@@ -182,7 +190,7 @@ async function downloadFile(
 
     if (status !== 200) {
         response.resume();
-        throw new Error(`Failed to download ${url}: ${status} ${response.statusMessage}`);
+        throw new NetworkError(`Failed to download ${url}: ${status} ${response.statusMessage}`);
     }
 
     onStart?.();
@@ -190,7 +198,7 @@ async function downloadFile(
         await pipeline(response, fs.createWriteStream(destPath));
     } catch (err) {
         await fs.remove(destPath);
-        throw err;
+        throw new NetworkError(`Failed to download ${url}: ${err instanceof Error ? err.message : err}`);
     }
 }
 
@@ -798,7 +806,7 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
         } catch (err) {
             if (err instanceof AssetNotFoundError) {
                 await context.globalState.update(MISSING_ASSET_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
-            } else {
+            } else if (!(err instanceof NetworkError)) {
                 await context.globalState.update(FAILED_INSTALL_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
             }
             throw err;
@@ -974,7 +982,10 @@ export async function findExistingExecutable(
         return undefined;
     }
 
-    candidates.sort((a, b) => compareVersionsDesc(a.version, b.version));
+    // Prefer releases over prereleases another workspace may have pinned.
+    const isPrerelease = (version: string) => !/^\d+(\.\d+)*$/.test(version);
+    candidates.sort((a, b) =>
+        Number(isPrerelease(a.version)) - Number(isPrerelease(b.version)) || compareVersionsDesc(a.version, b.version));
     const newest = candidates[0];
     // Directory names have no 'v' prefix; put it back so callers see a tag.
     return { path: newest.execPath, version: `v${newest.version}` };
