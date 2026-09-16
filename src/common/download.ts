@@ -3,15 +3,54 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import * as https from 'https';
 import * as crypto from 'crypto';
+import type { IncomingHttpHeaders, IncomingMessage } from 'http';
+import { pipeline } from 'stream/promises';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import { logger } from './logger';
-import { BINARY_NAME, getPlatformInfo, getDownloadUrl, getChecksumUrl } from './constants';
+import { BINARY_NAME, FALLBACK_SERVER_VERSION, SERVER_REPO, getPlatformInfo, getDownloadUrl, getChecksumUrl } from './constants';
 import { getVersionedDir, getExecutablePath, getLibsRoot, isWindows } from './constants';
 import { fsapi } from './vscodeapi';
 import { isDeveloperMode } from './settings';
 
 const execAsync = promisify(exec);
+
+/** globalState key holding the tag `latest` last resolved to, and when. */
+export const LATEST_TAG_CACHE_KEY = 'hydrust.latestServerTag.v1';
+
+/** How long a resolved `latest` tag is trusted before GitHub is asked again. */
+export const LATEST_TAG_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** globalState key holding the epoch ms before which the GitHub API is not called. */
+export const API_BACKOFF_KEY = 'hydrust.githubApiBackoffUntil.v1';
+
+/** globalState key holding the ETag of the last releases listing and the tag picked from it. */
+export const API_ETAG_CACHE_KEY = 'hydrust.githubReleasesEtag.v1';
+
+/** Timeout for the small metadata requests made while resolving a version. */
+export const REQUEST_TIMEOUT_MS = 10_000;
+
+/** How long a download may go without receiving any data before it is abandoned. */
+export const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
+
+/** Shortest backoff after a rate-limit response, as GitHub's guidance asks. */
+export const MIN_API_BACKOFF_MS = 60_000;
+
+const USER_AGENT = 'hydra-lsp-vscode';
+const MAX_REDIRECTS = 5;
+
+interface CachedLatestTag {
+    tag: string;
+    checkedAt: number;
+}
+
+interface CachedReleasesEtag {
+    etag: string;
+    tag: string;
+}
+
+/** The requested release does not have the file that was asked for. */
+class AssetNotFoundError extends Error {}
 
 /**
  * In developer mode, log full details and surface a popup with a "Show Logs"
@@ -35,39 +74,79 @@ function notifyDeveloper(summary: string, ...details: unknown[]): void {
 }
 
 /**
- * Download a file from a URL
+ * Send a single HTTPS request without following redirects.
+ *
+ * The timeout is an idle timeout on the socket, so it also bounds a stalled
+ * response body, not just the wait for headers.
  */
-async function downloadFile(url: string, destPath: string): Promise<void> {
+function request(
+    url: string,
+    options: { method?: string; headers?: Record<string, string>; timeoutMs: number }
+): Promise<IncomingMessage> {
     return new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(destPath);
-        https.get(url, (response) => {
-            if (response.statusCode === 302 || response.statusCode === 301) {
-                // Handle redirects
-                if (response.headers.location) {
-                    file.close();
-                    fs.unlinkSync(destPath);
-                    downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
-                    return;
-                }
-            }
-
-            if (response.statusCode !== 200) {
-                file.close();
-                fs.unlinkSync(destPath);
-                reject(new Error(`Failed to download: ${response.statusCode} ${response.statusMessage}`));
-                return;
-            }
-
-            response.pipe(file);
-            file.on('finish', () => {
-                file.close();
-                resolve();
-            });
-        }).on('error', (err) => {
-            fs.unlinkSync(destPath);
-            reject(err);
+        const req = https.request(
+            url,
+            {
+                method: options.method ?? 'GET',
+                headers: { 'User-Agent': USER_AGENT, ...options.headers },
+                timeout: options.timeoutMs,
+            },
+            resolve
+        );
+        req.on('timeout', () => {
+            req.destroy(new Error(`Request to ${url} timed out after ${options.timeoutMs}ms`));
         });
+        req.on('error', reject);
+        req.end();
     });
+}
+
+async function readBody(response: IncomingMessage): Promise<string> {
+    let data = '';
+    for await (const chunk of response) {
+        data += chunk;
+    }
+    return data;
+}
+
+function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
+    const value = headers[name];
+    return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Download a file from a URL, following redirects.
+ */
+async function downloadFile(url: string, destPath: string, redirectsLeft = MAX_REDIRECTS): Promise<void> {
+    const response = await request(url, { timeoutMs: DOWNLOAD_IDLE_TIMEOUT_MS });
+    const status = response.statusCode ?? 0;
+    const location = response.headers.location;
+
+    if (status >= 300 && status < 400 && location) {
+        response.resume();
+        if (redirectsLeft === 0) {
+            throw new Error(`Too many redirects while downloading ${url}`);
+        }
+        await downloadFile(new URL(location, url).toString(), destPath, redirectsLeft - 1);
+        return;
+    }
+
+    if (status === 404) {
+        response.resume();
+        throw new AssetNotFoundError(`Not found: ${url}`);
+    }
+
+    if (status !== 200) {
+        response.resume();
+        throw new Error(`Failed to download ${url}: ${status} ${response.statusMessage}`);
+    }
+
+    try {
+        await pipeline(response, fs.createWriteStream(destPath));
+    } catch (err) {
+        await fs.remove(destPath);
+        throw err;
+    }
 }
 
 /**
@@ -176,107 +255,166 @@ async function extractArchive(archivePath: string, destDir: string): Promise<voi
 }
 
 /**
- * Get the latest release version from GitHub that contains an asset
- * matching the expected binary name for the current platform.
+ * Find the tag of the latest release from the redirect github.com serves for
+ * `/releases/latest`.
  *
- * This ensures the extension only resolves to a release that actually
- * provides the binary it expects to download.
+ * This is an ordinary web request rather than an API call, so it keeps working
+ * when the API rate limit is exhausted. It says nothing about which assets the
+ * release has, and it never points at a prerelease.
  */
-async function getLatestVersion(): Promise<string> {
-    const platformInfo = getPlatformInfo();
-    const expectedAssetName = `${BINARY_NAME}-${platformInfo.platform}.${platformInfo.archiveExt}`;
-
-    return new Promise((resolve, reject) => {
-        const options = {
-            hostname: 'api.github.com',
-            path: '/repos/m-lyon/hydra-lsp/releases',
-            method: 'GET',
-            headers: {
-                'User-Agent': 'hydra-lsp-vscode',
-            },
-        };
-
-        https.get(options, (response) => {
-            let data = '';
-
-            response.on('data', (chunk) => {
-                data += chunk;
-            });
-
-            response.on('end', () => {
-                try {
-                    const releases = JSON.parse(data);
-                    if (!Array.isArray(releases)) {
-                        notifyDeveloper(
-                            `Unexpected response from GitHub releases API (status ${response.statusCode}).`,
-                            'Parsed payload:',
-                            releases
-                        );
-                        reject(new Error('Unexpected response from GitHub releases API'));
-                        return;
-                    }
-                    for (const release of releases) {
-                        if (!release.tag_name || !Array.isArray(release.assets)) {
-                            continue;
-                        }
-                        const hasMatchingAsset = release.assets.some(
-                            (asset: { name: string }) => asset.name === expectedAssetName
-                        );
-                        if (hasMatchingAsset) {
-                            resolve(release.tag_name);
-                            return;
-                        }
-                    }
-                    notifyDeveloper(
-                        `No GitHub release found with asset matching '${expectedAssetName}'.`,
-                        'Inspected releases:',
-                        releases.map((r: { tag_name?: string; assets?: { name: string }[] }) => ({
-                            tag_name: r.tag_name,
-                            asset_names: Array.isArray(r.assets) ? r.assets.map((a) => a.name) : [],
-                        }))
-                    );
-                    reject(new Error(`No release found with asset matching '${expectedAssetName}'`));
-                } catch (err) {
-                    notifyDeveloper(
-                        `Failed to parse GitHub releases API response (status ${response.statusCode}).`,
-                        'Error:',
-                        err,
-                        'Raw body:',
-                        data
-                    );
-                    reject(err);
-                }
-            });
-        }).on('error', (err) => {
-            notifyDeveloper(
-                'Network error while contacting the GitHub releases API.',
-                'Error:',
-                err
+async function resolveLatestFromRedirect(): Promise<string | undefined> {
+    const url = `https://github.com/${SERVER_REPO}/releases/latest`;
+    try {
+        const response = await request(url, { method: 'HEAD', timeoutMs: REQUEST_TIMEOUT_MS });
+        response.resume();
+        const match = /\/releases\/tag\/([^/?#]+)$/.exec(response.headers.location ?? '');
+        if (!match) {
+            logger.warn(
+                `Could not read the latest release tag from ${url} ` +
+                `(status ${response.statusCode}, location ${response.headers.location ?? 'none'}).`
             );
-            reject(err);
-        });
-    });
+            return undefined;
+        }
+        const tag = decodeURIComponent(match[1]);
+        logger.info(`Latest release resolved to ${tag} from the GitHub releases page.`);
+        return tag;
+    } catch (err) {
+        logger.warn(`Could not reach ${url}: ${err}`);
+        return undefined;
+    }
 }
 
 /**
- * Resolve a version string to a concrete, v-prefixed tag.
- * 'latest' (or empty) hits the GitHub API; anything else is normalized in place.
+ * When to next call the GitHub API after a rate-limit response, following
+ * GitHub's guidance: `retry-after` first, then `x-ratelimit-reset` when the
+ * quota is spent, and otherwise at least a minute.
  */
-async function resolveVersion(version: string): Promise<string> {
-    let resolved = version;
-    if (version === 'latest' || !version) {
-        resolved = await getLatestVersion();
-        logger.info(`Latest version resolved to: ${resolved}`);
+export function rateLimitRetryTime(headers: IncomingHttpHeaders, now: number): number {
+    const retryAfter = Number(headerValue(headers, 'retry-after'));
+    if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        return now + retryAfter * 1000;
     }
-    if (!resolved.startsWith('v')) {
-        resolved = `v${resolved}`;
+    const reset = Number(headerValue(headers, 'x-ratelimit-reset'));
+    if (headerValue(headers, 'x-ratelimit-remaining') === '0' && Number.isFinite(reset)) {
+        return Math.max(reset * 1000, now + MIN_API_BACKOFF_MS);
     }
-    return resolved;
+    return now + MIN_API_BACKOFF_MS;
+}
+
+/**
+ * Find the newest release that has an archive for this platform, using the
+ * GitHub releases API.
+ *
+ * Only needed when the latest release is missing this platform's archive, or
+ * the releases page could not be reached. Never throws: every failure is logged
+ * and reported as undefined so the caller can move on to the next option.
+ */
+async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<string | undefined> {
+    const backoffUntil = context.globalState.get<number>(API_BACKOFF_KEY);
+    if (backoffUntil !== undefined && Date.now() < backoffUntil) {
+        logger.info(
+            `Not calling the GitHub API: rate limited until ${new Date(backoffUntil).toLocaleTimeString()}.`
+        );
+        return undefined;
+    }
+
+    const platformInfo = getPlatformInfo();
+    const expectedAssetName = `${BINARY_NAME}-${platformInfo.platform}.${platformInfo.archiveExt}`;
+    const url = `https://api.github.com/repos/${SERVER_REPO}/releases`;
+    const cachedEtag = context.globalState.get<CachedReleasesEtag>(API_ETAG_CACHE_KEY);
+
+    const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
+    if (cachedEtag) {
+        headers['If-None-Match'] = cachedEtag.etag;
+    }
+
+    let response: IncomingMessage;
+    try {
+        response = await request(url, { headers, timeoutMs: REQUEST_TIMEOUT_MS });
+    } catch (err) {
+        logger.warn(`Could not reach the GitHub releases API: ${err}`);
+        return undefined;
+    }
+
+    const status = response.statusCode ?? 0;
+
+    if (status === 304 && cachedEtag) {
+        response.resume();
+        logger.info(`GitHub releases unchanged since the last check; latest usable release is ${cachedEtag.tag}.`);
+        return cachedEtag.tag;
+    }
+
+    if (status === 403 || status === 429) {
+        response.resume();
+        const retryAt = rateLimitRetryTime(response.headers, Date.now());
+        await context.globalState.update(API_BACKOFF_KEY, retryAt);
+        logger.warn(
+            `GitHub API rate limit exceeded (status ${status}), resets at ` +
+            `${new Date(retryAt).toLocaleTimeString()}. The API will not be called again before then.`
+        );
+        return undefined;
+    }
+
+    const body = await readBody(response).catch((err) => {
+        logger.warn(`Failed to read the GitHub releases API response: ${err}`);
+        return undefined;
+    });
+    if (body === undefined) {
+        return undefined;
+    }
+
+    if (status !== 200) {
+        logger.warn(`GitHub releases API returned status ${status}.`);
+        notifyDeveloper(`GitHub releases API returned status ${status}.`, 'Body:', body);
+        return undefined;
+    }
+
+    let releases: unknown;
+    try {
+        releases = JSON.parse(body);
+    } catch (err) {
+        logger.warn(`Failed to parse the GitHub releases API response: ${err}`);
+        notifyDeveloper('Failed to parse the GitHub releases API response.', 'Error:', err, 'Raw body:', body);
+        return undefined;
+    }
+    if (!Array.isArray(releases)) {
+        logger.warn('Unexpected response from the GitHub releases API.');
+        notifyDeveloper('Unexpected response from the GitHub releases API.', 'Parsed payload:', releases);
+        return undefined;
+    }
+
+    for (const release of releases) {
+        if (!release.tag_name || !Array.isArray(release.assets)) {
+            continue;
+        }
+        const hasMatchingAsset = release.assets.some(
+            (asset: { name: string }) => asset.name === expectedAssetName
+        );
+        if (hasMatchingAsset) {
+            const etag = headerValue(response.headers, 'etag');
+            if (etag) {
+                await context.globalState.update(API_ETAG_CACHE_KEY, { etag, tag: release.tag_name });
+            }
+            logger.info(`Newest release with a ${platformInfo.platform} archive is ${release.tag_name}.`);
+            return release.tag_name;
+        }
+    }
+
+    logger.warn(`No GitHub release has an asset named '${expectedAssetName}'.`);
+    notifyDeveloper(
+        `No GitHub release found with asset matching '${expectedAssetName}'.`,
+        'Inspected releases:',
+        releases.map((r: { tag_name?: string; assets?: { name: string }[] }) => ({
+            tag_name: r.tag_name,
+            asset_names: Array.isArray(r.assets) ? r.assets.map((a) => a.name) : [],
+        }))
+    );
+    return undefined;
 }
 
 /**
  * Download and install the Hydrust Server binary.
- * `resolvedVersion` must already be a concrete, v-prefixed tag (see resolveVersion).
+ * `resolvedVersion` must already be a concrete, v-prefixed tag.
  */
 async function downloadServer(
     resolvedVersion: string,
@@ -284,6 +422,7 @@ async function downloadServer(
     progressCallback?: (message: string) => void
 ): Promise<string> {
     const progress = progressCallback || ((msg: string) => logger.info(msg));
+    const versionedDir = getVersionedDir(context, resolvedVersion);
 
     try {
         // Get platform info
@@ -295,8 +434,6 @@ async function downloadServer(
         const checksumUrl = getChecksumUrl(resolvedVersion, platformInfo);
         logger.info(`Download URL: ${downloadUrl}`);
 
-        // Set up paths with versioned directory
-        const versionedDir = getVersionedDir(context, resolvedVersion);
         await fsapi.ensureDir(versionedDir);
 
         const archiveFilename = path.basename(downloadUrl);
@@ -339,28 +476,11 @@ async function downloadServer(
         return executablePath;
     } catch (err) {
         logger.error(`Failed to download server: ${err}`);
+        // Nothing usable was in this directory, or the download would not have
+        // been attempted, so a half-finished install can go.
+        await fs.remove(versionedDir).catch(() => undefined);
         throw err;
     }
-}
-
-/**
- * Check if the server binary needs to be downloaded.
- * `resolvedVersion` must already be a concrete, v-prefixed tag (see resolveVersion).
- */
-async function needsDownload(
-    resolvedVersion: string,
-    context: vscode.ExtensionContext
-): Promise<boolean> {
-    const executablePath = getExecutablePath(context, resolvedVersion);
-
-    const exists = await fsapi.pathExists(executablePath);
-    if (!exists) {
-        logger.info(`Binary for version ${resolvedVersion} not found, download needed`);
-        return true;
-    }
-
-    logger.info(`Binary for version ${resolvedVersion} already exists`);
-    return false;
 }
 
 /**
@@ -373,58 +493,119 @@ export interface InstalledServer {
     version: string;
 }
 
+function normaliseTag(version: string): string {
+    return version.startsWith('v') ? version : `v${version}`;
+}
+
+/** Use the installed binary for a tag, downloading it first if needed. */
+async function installVersion(tag: string, context: vscode.ExtensionContext): Promise<InstalledServer> {
+    const executablePath = getExecutablePath(context, tag);
+    if (await fsapi.pathExists(executablePath)) {
+        logger.info(`Binary for version ${tag} already exists`);
+        return { path: executablePath, version: tag };
+    }
+
+    logger.info(`Downloading Hydrust Server version: ${tag}`);
+    return await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Hydrust Server',
+            cancellable: false,
+        },
+        async (progress) => {
+            const installedPath = await downloadServer(tag, context, (message) => {
+                progress.report({ message });
+            });
+            return { path: installedPath, version: tag };
+        }
+    );
+}
+
 /**
- * Singleton guard: if a download is already in progress, all concurrent callers
- * will await the same promise rather than triggering a second download.
+ * Find a server for the `latest` setting, trying in order:
+ *
+ * 1. the tag resolved within the last day, if it is installed (no network);
+ * 2. the latest release, read from the github.com releases page;
+ * 3. the newest release with this platform's archive, from the GitHub API;
+ * 4. the newest binary already installed;
+ * 5. FALLBACK_SERVER_VERSION.
+ *
+ * Only a tag that was actually resolved from GitHub is cached, so a start that
+ * fell back to 4 or 5 tries GitHub again next time.
  */
-let activeDownload: Promise<InstalledServer> | undefined;
+async function ensureLatest(context: vscode.ExtensionContext): Promise<InstalledServer> {
+    const cached = context.globalState.get<CachedLatestTag>(LATEST_TAG_CACHE_KEY);
+    if (cached && Date.now() - cached.checkedAt < LATEST_TAG_TTL_MS) {
+        const executablePath = getExecutablePath(context, cached.tag);
+        if (await fsapi.pathExists(executablePath)) {
+            logger.info(`Using ${cached.tag}, resolved as the latest release within the last day.`);
+            return { path: executablePath, version: cached.tag };
+        }
+    }
+
+    const useResolved = async (tag: string): Promise<InstalledServer> => {
+        const installed = await installVersion(tag, context);
+        await context.globalState.update(LATEST_TAG_CACHE_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
+        return installed;
+    };
+
+    const redirectTag = await resolveLatestFromRedirect();
+    if (redirectTag) {
+        try {
+            return await useResolved(redirectTag);
+        } catch (err) {
+            if (!(err instanceof AssetNotFoundError)) {
+                logger.warn(`Could not install ${redirectTag}: ${err}`);
+            } else {
+                logger.info(`Release ${redirectTag} has no archive for this platform; looking for an older one.`);
+            }
+        }
+    }
+
+    const apiTag = await resolveLatestFromApi(context);
+    if (apiTag && apiTag !== redirectTag) {
+        try {
+            return await useResolved(apiTag);
+        } catch (err) {
+            logger.warn(`Could not install ${apiTag}: ${err}`);
+        }
+    }
+
+    const existing = await findExistingExecutable(context);
+    if (existing) {
+        logger.warn(`Could not resolve the latest release; using the installed ${existing.version} instead.`);
+        return existing;
+    }
+
+    logger.warn(`Could not resolve the latest release; installing the fallback ${FALLBACK_SERVER_VERSION} instead.`);
+    return await installVersion(FALLBACK_SERVER_VERSION, context);
+}
+
+/**
+ * Singleton guard: while a server is being resolved or downloaded, every
+ * concurrent caller awaits the same promise rather than starting its own.
+ */
+let inFlight: Promise<InstalledServer> | undefined;
 
 /**
  * Ensure the server binary is available, downloading if necessary
  */
-export async function ensureServer(
+export function ensureServer(
     version: string,
     context: vscode.ExtensionContext
 ): Promise<InstalledServer> {
-    // If a download is already running, wait for it instead of starting a new one
-    if (activeDownload) {
-        logger.info('Download already in progress, waiting for it to complete...');
-        return activeDownload;
+    if (inFlight) {
+        logger.info('Server resolution already in progress, waiting for it to complete...');
+        return inFlight;
     }
 
-    const resolvedVersion = await resolveVersion(version);
-
-    if (await needsDownload(resolvedVersion, context)) {
-        // Re-check after the async needsDownload call: another caller may have
-        // started the download while we were awaiting.
-        if (activeDownload) {
-            logger.info('Download started by another caller, waiting...');
-            return activeDownload;
-        }
-
-        logger.info(`Downloading Hydrust Server version: ${resolvedVersion}`);
-
-        // Show progress to user
-        activeDownload = Promise.resolve(vscode.window.withProgress(
-            {
-                location: vscode.ProgressLocation.Notification,
-                title: 'Hydrust Server',
-                cancellable: false,
-            },
-            async (progress) => {
-                const executablePath = await downloadServer(resolvedVersion, context, (message) => {
-                    progress.report({ message });
-                });
-                return { path: executablePath, version: resolvedVersion };
-            }
-        )).finally(() => {
-            activeDownload = undefined;
-        });
-
-        return activeDownload;
-    }
-
-    return { path: getExecutablePath(context, resolvedVersion), version: resolvedVersion };
+    const work = version === 'latest' || !version
+        ? ensureLatest(context)
+        : installVersion(normaliseTag(version), context);
+    inFlight = work.finally(() => {
+        inFlight = undefined;
+    });
+    return inFlight;
 }
 
 /**
@@ -452,9 +633,9 @@ function compareVersionsDesc(a: string, b: string): number {
 }
 
 /**
- * Scan the bundled libs directory for any previously-installed binary and
- * return the path to the newest one (by semver). Returns undefined if none
- * exists or the directory can't be read.
+ * Scan the libs directory for any previously-installed binary and return the
+ * path to the newest one (by semver). Returns undefined if none exists or the
+ * directory can't be read.
  *
  * Used as a fallback when the normal download/resolve path fails (e.g. no
  * network) so the extension can still start with a previously-cached binary.
@@ -468,7 +649,7 @@ export async function findExistingExecutable(
     try {
         entries = await fs.readdir(libsRoot);
     } catch (err) {
-        logger.debug(`No bundled libs directory to scan for fallback: ${err}`);
+        logger.debug(`No libs directory to scan for fallback: ${err}`);
         return undefined;
     }
 

@@ -189,7 +189,14 @@ export const window = {
         stub.messages.push({ kind: 'error', message, items });
         return Promise.resolve(undefined);
     },
+
+    withProgress: <T>(
+        _options: unknown,
+        task: (progress: { report(value: { message?: string }): void }) => Promise<T>
+    ): Promise<T> => task({ report: () => undefined }),
 };
+
+export const ProgressLocation = { SourceControl: 1, Window: 10, Notification: 15 };
 
 export const commands = {
     executeCommand: (command: string, ...args: unknown[]) => {
@@ -220,6 +227,7 @@ export const workspace = {
  */
 export function createStubExtensionContext(extensionPath = '/tmp/hydrust'): {
     extensionPath: string;
+    globalStorageUri: Uri;
     subscriptions: { dispose(): void }[];
     globalState: {
         get<T>(key: string, defaultValue?: T): T | undefined;
@@ -230,6 +238,7 @@ export function createStubExtensionContext(extensionPath = '/tmp/hydrust'): {
 } {
     return {
         extensionPath,
+        globalStorageUri: Uri.file(`${extensionPath}/globalStorage`),
         subscriptions: [],
         globalState: {
             get<T>(key: string, defaultValue?: T): T | undefined {

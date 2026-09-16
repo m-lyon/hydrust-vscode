@@ -43,6 +43,13 @@ jobs:
             exit 1
           fi
 
+      # Only the packaged build gets the new pin; the committed value stays as a
+      # working floor. Runs before the bundle is built by vsce's prepublish step.
+      - name: Pin the fallback server version to the newest complete release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/pin-server-version.mjs
+
       - name: Package extension
         run: npx vsce package
 
