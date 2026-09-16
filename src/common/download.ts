@@ -39,11 +39,20 @@ export const MIN_API_BACKOFF_MS = 60_000;
 /** Staging directories older than this are assumed abandoned by a closed or crashed window. */
 export const STALE_STAGING_MS = 60 * 60 * 1000;
 
-/** globalState key mapping each installed version directory to when a window last used it. */
+/** Prefix for the globalState key recording when a window last used a version. */
 export const VERSION_LAST_USED_KEY = 'hydrust.serverVersionsLastUsed.v1';
 
 /** Installed versions used by any window more recently than this are never pruned. */
 export const PRUNE_UNUSED_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * globalState key holding when a window last used the version installed at `dir`.
+ * Each version gets its own key so that concurrent writes from different windows,
+ * for different versions, never overwrite one another.
+ */
+export function versionLastUsedKey(dir: string): string {
+    return `${VERSION_LAST_USED_KEY}.${dir}`;
+}
 
 /** Release tags that are safe to use in file paths and shell commands. */
 const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
@@ -520,10 +529,12 @@ async function pruneOldVersions(context: vscode.ExtensionContext, keep: string):
     } catch {
         return;
     }
-    const lastUsed = context.globalState.get<Record<string, number>>(VERSION_LAST_USED_KEY) ?? {};
     const others = entries.filter((entry) => !entry.startsWith('.') && entry !== keep).sort(compareVersionsDesc);
     for (const entry of others.slice(1)) {
-        if (Date.now() - (lastUsed[entry] ?? 0) < PRUNE_UNUSED_MS) {
+        // Read just before deciding, so a use recorded by another window between
+        // entries in this loop is not missed.
+        const lastUsed = context.globalState.get<number>(versionLastUsedKey(entry)) ?? 0;
+        if (Date.now() - lastUsed < PRUNE_UNUSED_MS) {
             continue;
         }
         const dir = path.join(libsRoot, entry);
@@ -535,6 +546,7 @@ async function pruneOldVersions(context: vscode.ExtensionContext, keep: string):
             continue;
         }
         await fs.remove(discardDir).catch((err) => logger.warn(`Could not remove ${discardDir}: ${err}`));
+        await context.globalState.update(versionLastUsedKey(entry), undefined);
         logger.info(`Removed old install ${dir}`);
     }
 }
@@ -774,8 +786,7 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
  */
 export async function markVersionUsed(context: vscode.ExtensionContext, version: string): Promise<void> {
     const dir = path.basename(getVersionedDir(context, version));
-    const lastUsed = context.globalState.get<Record<string, number>>(VERSION_LAST_USED_KEY) ?? {};
-    await context.globalState.update(VERSION_LAST_USED_KEY, { ...lastUsed, [dir]: Date.now() });
+    await context.globalState.update(versionLastUsedKey(dir), Date.now());
 }
 
 /**

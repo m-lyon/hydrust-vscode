@@ -91,9 +91,10 @@ import {
     MIN_API_BACKOFF_MS,
     PRUNE_UNUSED_MS,
     STALE_STAGING_MS,
-    VERSION_LAST_USED_KEY,
     ensureServer,
+    markVersionUsed,
     rateLimitRetryTime,
+    versionLastUsedKey,
 } from '../../src/common/download';
 import {
     FALLBACK_SERVER_VERSION,
@@ -340,6 +341,18 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
 
         await expect(ensure('v0.3.0')).rejects.toThrow('Checksum verification failed');
         expect(fs.existsSync(path.join(getLibsRoot(context), '0.3.0'))).toBe(false);
+        // The download got far enough to open a progress notification; it must
+        // still be settled, not left open forever, once the install fails.
+        expect(stub.progressNotifications).toHaveLength(1);
+        expect(stub.progressNotifications[0].settled).toBe(true);
+    });
+
+    it('opens no progress notification when the release has no archive for this platform', async () => {
+        net.routes.set(assetUrl('v0.5.0'), { status: 404 });
+
+        await expect(ensure('v0.5.0')).rejects.toThrow();
+
+        expect(stub.progressNotifications).toEqual([]);
     });
 
     it('uses the install another window finished while this one was downloading', async () => {
@@ -485,15 +498,25 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
         await ensure('v0.1.0');
         installOnDisk('v0.2.0');
         installOnDisk('v0.2.5');
-        stub.globalState.set(VERSION_LAST_USED_KEY, {
-            ...(stub.globalState.get(VERSION_LAST_USED_KEY) as Record<string, number>),
-            '0.2.0': Date.now() - PRUNE_UNUSED_MS - 60_000,
-        });
+        stub.globalState.set(versionLastUsedKey('0.2.0'), Date.now() - PRUNE_UNUSED_MS - 60_000);
         publishRelease('v0.3.0');
 
         await ensure('v0.3.0');
 
         expect(fs.readdirSync(getLibsRoot(context)).sort()).toEqual(['0.1.0', '0.2.5', '0.3.0']);
+    });
+
+    it('records last-used time per version, so two windows marking different versions used at once do not clobber each other', async () => {
+        installOnDisk('v0.1.0');
+        installOnDisk('v0.2.0');
+
+        await Promise.all([
+            markVersionUsed(asExtensionContext(context), 'v0.1.0'),
+            markVersionUsed(asExtensionContext(context), 'v0.2.0'),
+        ]);
+
+        expect(stub.globalState.has(versionLastUsedKey('0.1.0'))).toBe(true);
+        expect(stub.globalState.has(versionLastUsedKey('0.2.0'))).toBe(true);
     });
 
     it('treats a 403 without rate-limit headers as an ordinary failure', async () => {

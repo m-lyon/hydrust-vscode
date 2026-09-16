@@ -24,6 +24,13 @@ export interface RecordedMessage {
     items: string[];
 }
 
+/** One `window.withProgress` call, with the messages reported to it. */
+export interface RecordedProgress {
+    title: string;
+    messages: string[];
+    settled: boolean;
+}
+
 /** The shape `WorkspaceConfiguration.inspect` hands back. */
 export interface InspectResult {
     key: string;
@@ -78,6 +85,8 @@ export interface VscodeStubState {
     messages: RecordedMessage[];
     /** Status bar items handed out by `window.createStatusBarItem`. */
     statusBarItems: StubStatusBarItem[];
+    /** Every `window.withProgress` call, oldest first. */
+    progressNotifications: RecordedProgress[];
     /** Lines written to the output channel, as `level: text`. */
     logs: string[];
     /** What `workspace.getConfiguration(...).inspect(key)` should return. */
@@ -95,6 +104,7 @@ function freshState(): VscodeStubState {
         commands: [],
         messages: [],
         statusBarItems: [],
+        progressNotifications: [],
         logs: [],
         configInspect: new Map<string, InspectResult>(),
         configurationRequests: [],
@@ -191,9 +201,23 @@ export const window = {
     },
 
     withProgress: <T>(
-        _options: unknown,
+        options: { title?: string },
         task: (progress: { report(value: { message?: string }): void }) => Promise<T>
-    ): Promise<T> => task({ report: () => undefined }),
+    ): Promise<T> => {
+        const record: RecordedProgress = { title: options?.title ?? '', messages: [], settled: false };
+        stub.progressNotifications.push(record);
+        const result = task({
+            report: (value) => {
+                if (value.message !== undefined) {
+                    record.messages.push(value.message);
+                }
+            },
+        });
+        void result.finally(() => {
+            record.settled = true;
+        });
+        return result;
+    },
 };
 
 export const ProgressLocation = { SourceControl: 1, Window: 10, Notification: 15 };
