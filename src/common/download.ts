@@ -434,6 +434,25 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
     return undefined;
 }
 
+/**
+ * Rename, retrying briefly on the transient EPERM/EBUSY errors Windows raises
+ * while something such as a virus scanner still has the new files open.
+ */
+async function renameWithRetry(from: string, to: string, attempts = 5): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            await fs.rename(from, to);
+            return;
+        } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= attempts) {
+                throw err;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+        }
+    }
+}
+
 /** Remove staging directories left behind by installs that never finished. */
 async function removeStaleStagingDirs(libsRoot: string): Promise<void> {
     let entries: string[];
@@ -532,18 +551,32 @@ async function downloadServer(
             logger.info('Made executable');
         }
 
+        const useConcurrentInstall = async () => {
+            // Another window finished installing this version first.
+            logger.info(`Version ${resolvedVersion} was installed concurrently; using that install.`);
+            await fs.remove(stagingDir).catch(() => undefined);
+        };
         try {
-            await fs.rename(stagingDir, versionedDir);
+            await renameWithRetry(stagingDir, versionedDir);
         } catch (err) {
             if (await fsapi.pathExists(executablePath)) {
-                // Another window finished installing this version first.
-                logger.info(`Version ${resolvedVersion} was installed concurrently; using that install.`);
-                await fs.remove(stagingDir).catch(() => undefined);
+                await useConcurrentInstall();
             } else {
+                const code = (err as NodeJS.ErrnoException).code;
+                if (code !== 'ENOTEMPTY' && code !== 'EEXIST') {
+                    throw err;
+                }
                 // A leftover directory without the executable is in the way.
                 logger.warn(`Replacing incomplete install at ${versionedDir}: ${err}`);
                 await fs.remove(versionedDir);
-                await fs.rename(stagingDir, versionedDir);
+                try {
+                    await renameWithRetry(stagingDir, versionedDir);
+                } catch (retryErr) {
+                    if (!(await fsapi.pathExists(executablePath))) {
+                        throw retryErr;
+                    }
+                    await useConcurrentInstall();
+                }
             }
         }
 

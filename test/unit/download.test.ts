@@ -21,7 +21,7 @@ interface Reply {
 }
 
 /** A URL either gets a fixed reply, a reply built from the request, or a connection error. */
-type Route = Reply | ((headers: Record<string, string>) => Reply) | 'network-error';
+type Route = Reply | ((headers: Record<string, string>) => Reply) | 'network-error' | 'timeout';
 
 const net = vi.hoisted(() => ({
     routes: new Map<string, unknown>(),
@@ -45,6 +45,10 @@ vi.mock('https', async () => {
                     const headers = options.headers ?? {};
                     net.calls.push({ method, url, headers });
                     const route = net.routes.get(url) as Route | undefined;
+                    if (route === 'timeout') {
+                        req.emit('timeout');
+                        return;
+                    }
                     if (route === undefined || route === 'network-error') {
                         req.emit('error', new Error(`connect ECONNREFUSED (${url})`));
                         return;
@@ -373,6 +377,44 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
     it('rejects a configured version that is not a plain version', async () => {
         await expect(ensure('../escape')).rejects.toThrow('Invalid hydrust.serverVersion');
         expect(net.calls).toEqual([]);
+    });
+
+    it('follows the redirect GitHub serves for release assets', async () => {
+        publishRelease('v0.3.0');
+        const cdn = 'https://objects.githubusercontent.com/archive';
+        net.routes.set(cdn, net.routes.get(assetUrl('v0.3.0')));
+        net.routes.set(assetUrl('v0.3.0'), { status: 302, headers: { location: cdn } });
+
+        const installed = await ensure('v0.3.0');
+
+        expect(fs.readFileSync(installed.path, 'utf8')).toBe('#!/bin/sh\n');
+        expect(requested(cdn)).toBe(1);
+    });
+
+    it('resolves a relative redirect location against the asset URL', async () => {
+        publishRelease('v0.3.0');
+        const target = new URL('/mirror/archive', assetUrl('v0.3.0')).toString();
+        net.routes.set(target, net.routes.get(assetUrl('v0.3.0')));
+        net.routes.set(assetUrl('v0.3.0'), { status: 302, headers: { location: '/mirror/archive' } });
+
+        await expect(ensure('v0.3.0')).resolves.toMatchObject({ version: 'v0.3.0' });
+        expect(requested(target)).toBe(1);
+    });
+
+    it('gives up on a redirect loop', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(assetUrl('v0.3.0'), { status: 302, headers: { location: assetUrl('v0.3.0') } });
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('Too many redirects');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
+    });
+
+    it('abandons a download that times out and leaves no partial archive', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(assetUrl('v0.3.0'), 'timeout');
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('timed out');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
     });
 
     it('shares one resolution between concurrent callers', async () => {
