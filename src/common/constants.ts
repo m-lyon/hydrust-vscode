@@ -2,8 +2,6 @@ import * as path from 'path';
 import * as os from 'os';
 import {
     BINARY_NAME_CANDIDATES,
-    DISPLAY_NAME,
-    LEGACY_BINARY_NAME,
     archiveName,
     parseServerVersion,
     serverExecutableName,
@@ -22,7 +20,7 @@ import {
  * were merged it was the CLI, which exits 2 on `server`. On a tie, the
  * earlier name here wins.
  */
-export const PATH_CANDIDATES: readonly string[] = [DISPLAY_NAME, LEGACY_BINARY_NAME];
+export const PATH_CANDIDATES: readonly string[] = BINARY_NAME_CANDIDATES;
 
 /** The GitHub repository the server is released from, as `owner/name`. */
 export const SERVER_REPO = 'm-lyon/hydra-lsp';

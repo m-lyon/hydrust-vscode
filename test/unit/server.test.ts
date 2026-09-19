@@ -148,8 +148,8 @@ function rememberVersion(binaryPath: string, version: string): void {
 }
 
 /** Like rememberVersion, for several binaries at once. */
-function rememberVersions(versions: Record<string, string>): void {
-    const entries: Record<string, string> = {};
+function rememberVersions(versions: Record<string, string | null>): void {
+    const entries: Record<string, string | null> = {};
     for (const [binaryPath, version] of Object.entries(versions)) {
         const stats = fs.statSync(binaryPath);
         entries[`${binaryPath}|${Math.round(stats.mtimeMs)}|${stats.size}`] = version;
@@ -352,6 +352,20 @@ describe('a serverPath pointing at hydrust', () => {
         expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
     });
 
+    it('warns once per path, not on every restart', async () => {
+        const bundled = writeBinary('bundled-hydra-lsp');
+        const hydrust = writeBinary('hydrust');
+        rememberVersions({ [bundled]: 'v0.4.0', [hydrust]: 'v0.4.2' });
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: bundled, version: 'v0.4.0' };
+
+        await start(settingsFor(hydrust, { serverVersion: '0.4.0' }));
+        await start(settingsFor(hydrust, { serverVersion: '0.4.0' }));
+
+        const warnings = stub.messages.filter((m) => m.kind === 'warning' && m.message.includes(hydrust));
+        expect(warnings).toHaveLength(1);
+    });
+
     it('is used when its version cannot be determined', async () => {
         const hydrust = writeBinary('hydrust');
 
@@ -444,6 +458,23 @@ describe('looking for a server on PATH', () => {
         await start(settingsFor('', { serverVersion: '0.4.0' }));
 
         expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+
+    it('asks a hydrust remembered as unknown again, but only once per session', async () => {
+        const bundled = bundledFallback();
+        const runs = path.join(scratchDir, 'runs');
+        const hydrust = path.join(scratchDir, 'hydrust');
+        fs.writeFileSync(hydrust, `#!/bin/sh\necho run >> "${runs}"\necho "hydrust 0.5.0"\n`, { mode: 0o755 });
+        rememberVersions({ [bundled]: 'v0.4.0', [hydrust]: null });
+        whichStub.paths = { hydrust };
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydrust);
+
+        rememberVersions({ [bundled]: 'v0.4.0', [hydrust]: null });
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(bundled);
+        expect(fs.readFileSync(runs, 'utf8').trim().split('\n')).toHaveLength(1);
     });
 
     it('skips a hydrust.cmd shim that is the pre-merge CLI', async () => {

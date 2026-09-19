@@ -126,10 +126,17 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
                 }
                 const version = await probeBinaryVersion(environmentPath, context, undefined, recheck);
                 if (!isUsableServer(environmentPath, version)) {
-                    logger.info(
-                        `Ignoring ${environmentPath}: not ${DISPLAY_NAME} ` +
-                        `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
-                    );
+                    if (version) {
+                        logger.info(
+                            `Ignoring ${environmentPath}: not ${DISPLAY_NAME} ` +
+                            `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
+                        );
+                    } else {
+                        logger.warn(
+                            `Ignoring ${environmentPath}: could not determine its version, so cannot tell ` +
+                            `whether it is ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} or later.`
+                        );
+                    }
                     continue;
                 }
                 if (!best) {
