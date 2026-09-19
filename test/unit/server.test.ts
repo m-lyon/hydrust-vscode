@@ -39,7 +39,32 @@ const clientStub = vi.hoisted(() => ({
     initializeResult: undefined as unknown,
     /** When set, `client.start()` rejects with this. */
     startError: undefined as Error | undefined,
+    /** Listeners registered through `client.onDidChangeState`, oldest first. */
+    stateListeners: [] as ((event: { oldState: number; newState: number }) => void)[],
 }));
+
+const downloadStub = vi.hoisted(() => ({
+    ensureError: undefined as Error | undefined,
+    existing: undefined as { path: string; version: string } | undefined,
+    scans: 0,
+}));
+
+vi.mock('../../src/common/download', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/common/download')>();
+    return {
+        ...actual,
+        ensureServer: async (...args: Parameters<typeof actual.ensureServer>) => {
+            if (downloadStub.ensureError) {
+                throw downloadStub.ensureError;
+            }
+            return actual.ensureServer(...args);
+        },
+        findExistingExecutable: async () => {
+            downloadStub.scans++;
+            return downloadStub.existing;
+        },
+    };
+});
 
 vi.mock('vscode-languageclient/node', () => {
     class LanguageClient {
@@ -69,13 +94,20 @@ vi.mock('vscode-languageclient/node', () => {
         async stop(): Promise<void> {
             // Nothing to tear down.
         }
+
+        onDidChangeState(listener: (event: { oldState: number; newState: number }) => void): { dispose(): void } {
+            clientStub.stateListeners.push(listener);
+            return { dispose() {} };
+        }
     }
 
-    return { LanguageClient };
+    return { LanguageClient, State: { Stopped: 1, Starting: 3, Running: 2 } };
 });
 
 import { startServer } from '../../src/common/server';
 import { PROBE_CACHE_KEY } from '../../src/common/compat';
+import { getVersionedDir } from '../../src/common/constants';
+import { versionLastUsedKey } from '../../src/common/download';
 import { ExtensionSettings } from '../../src/common/settings';
 import { createStubExtensionContext, resetVscodeStub, stub } from '../stubs/vscode';
 
@@ -154,12 +186,17 @@ beforeEach(() => {
     clientStub.clients = [];
     clientStub.initializeResult = initializeResult('0.4.0');
     clientStub.startError = undefined;
+    clientStub.stateListeners = [];
+    downloadStub.ensureError = undefined;
+    downloadStub.existing = undefined;
+    downloadStub.scans = 0;
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
     outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
 });
 
 afterEach(() => {
+    vi.useRealTimers();
     fs.rmSync(scratchDir, { recursive: true, force: true });
 });
 
@@ -257,5 +294,73 @@ describe('failures around the launch', () => {
         clientStub.startError = new Error('spawn failed');
 
         await expect(start(settingsFor(binaryPath))).rejects.toThrow('spawn failed');
+    });
+});
+
+describe('falling back when the bundled server cannot be ensured', () => {
+    it('uses an installed binary when a pinned version fails', async () => {
+        const binaryPath = writeBinary();
+        rememberVersion(binaryPath, 'v0.3.0');
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: binaryPath, version: 'v0.3.0' };
+
+        await start(settingsFor('', { importStrategy: 'useBundled', serverVersion: '0.4.0' }));
+
+        expect(downloadStub.scans).toBe(1);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(binaryPath);
+    });
+
+    it('does not scan again for latest, which already fell back inside ensureServer', async () => {
+        const binaryPath = writeBinary();
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: binaryPath, version: 'v0.3.0' };
+
+        await expect(start(settingsFor('', { importStrategy: 'useBundled', serverVersion: 'latest' }))).rejects.toThrow(
+            'offline'
+        );
+        expect(downloadStub.scans).toBe(0);
+    });
+});
+
+describe('keeping a running bundled server marked as used', () => {
+    const RUNNING = 2;
+    const STOPPED = 1;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    function fireState(newState: number): void {
+        for (const listener of clientStub.stateListeners) {
+            listener({ oldState: 0, newState });
+        }
+    }
+
+    it('records use on Running, refreshes daily, and never stacks intervals across restarts', async () => {
+        const binaryPath = writeBinary();
+        rememberVersion(binaryPath, 'v0.3.0');
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: binaryPath, version: 'v0.3.0' };
+
+        await start(settingsFor('', { importStrategy: 'useBundled', serverVersion: '0.4.0' }));
+        expect(clientStub.stateListeners).toHaveLength(1);
+
+        const key = versionLastUsedKey(path.basename(getVersionedDir(asExtensionContext(context), 'v0.3.0')));
+        stub.globalState.delete(key);
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+        vi.setSystemTime(1_000_000);
+
+        fireState(RUNNING);
+        await Promise.resolve();
+        expect(stub.globalState.get(key)).toBe(1_000_000);
+        expect(vi.getTimerCount()).toBe(1);
+
+        vi.advanceTimersByTime(DAY_MS);
+        await Promise.resolve();
+        expect(stub.globalState.get(key)).toBe(1_000_000 + DAY_MS);
+
+        fireState(STOPPED);
+        expect(vi.getTimerCount()).toBe(0);
+
+        fireState(RUNNING);
+        fireState(RUNNING);
+        expect(vi.getTimerCount()).toBe(1);
     });
 });

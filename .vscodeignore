@@ -3,6 +3,7 @@
 .claude/**
 .github/**
 src/**
+scripts/**
 test/**
 dev-docs/**
 .gitignore
