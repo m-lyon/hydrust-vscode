@@ -132,17 +132,19 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
 
 /**
  * Work out the version of a binary, remembering the answer so restarts do not
- * keep spawning processes.
+ * keep spawning processes. `retryUnknown` ignores a remembered failure and
+ * asks the binary again.
  */
 export async function probeBinaryVersion(
     binaryPath: string,
     context: vscode.ExtensionContext,
-    timeoutMs?: number
+    timeoutMs?: number,
+    retryUnknown = false
 ): Promise<ServerVersion | undefined> {
     const fingerprint = await binaryFingerprint(binaryPath);
     const cache = context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {});
 
-    if (fingerprint && Object.prototype.hasOwnProperty.call(cache, fingerprint)) {
+    if (fingerprint && !(retryUnknown && cache[fingerprint] === null) && Object.prototype.hasOwnProperty.call(cache, fingerprint)) {
         const cached = cache[fingerprint];
         if (cached === null) {
             logger.debug(`Version of ${binaryPath} is still unknown (remembered from an earlier check).`);

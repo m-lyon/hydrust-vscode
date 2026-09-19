@@ -15,6 +15,7 @@
  * server binary.
  */
 
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -31,8 +32,11 @@ import {
     SETTING_COMPAT,
     advertisesPullDiagnostics,
     buildCompatReport,
+    UNIFIED_BINARY_VERSION,
     formatServerVersion,
+    isAtLeast,
     parseHydrustCapabilities,
+    parseServerVersion,
     readServerInfoVersion,
 } from '../../src/common/compatTable';
 import { ALL_CAPABILITIES, NO_CAPABILITIES, initializeHandshake } from './lspClient';
@@ -46,11 +50,10 @@ import { REPO_ROOT } from './serverRepo';
  * lands in a release. A `hydrust` needs the `server` subcommand to speak LSP;
  * a `hydra-lsp` predates it and takes no arguments.
  *
- * `hydra-lsp` is preferred while both exist, because until the two binaries
- * are merged `cargo build` produces both and only `hydra-lsp` is the language
- * server — a `hydrust` next to it is the CLI, which exits 2 on `server`. Once
- * the merge lands nothing builds a `hydra-lsp` any more, so this order has to
- * flip; a leftover one in target/debug would otherwise be picked up silently.
+ * Until the two binaries are merged `cargo build` produces both and only
+ * `hydra-lsp` is the language server — a `hydrust` next to it is the CLI,
+ * which exits 2 on `server`. So a `hydrust` is only picked when it reports
+ * the merged version, and it then wins over any leftover `hydra-lsp`.
  */
 function requireBinary(): { path: string; args: string[] } {
     const targetDir = path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug');
@@ -63,11 +66,26 @@ function requireBinary(): { path: string; args: string[] } {
             path.join(targetDir, 'hydrust.exe'),
         ];
 
-    for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) {
-            const isUnified = path.basename(candidate, path.extname(candidate)) === 'hydrust';
-            return { path: candidate, args: isUnified ? ['server'] : [] };
+    const found = candidates.filter((candidate) => fs.existsSync(candidate));
+    const isUnified = (candidate: string) =>
+        path.basename(candidate).toLowerCase().replace(/\.exe$/, '') === 'hydrust';
+    const merged = found.find((candidate) => {
+        if (!isUnified(candidate)) {
+            return false;
         }
+        const result = spawnSync(candidate, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+        const version = parseServerVersion(result.stdout);
+        return !!version && isAtLeast(version, UNIFIED_BINARY_VERSION);
+    });
+    if (merged) {
+        return { path: merged, args: ['server'] };
+    }
+    const legacy = found.find((candidate) => !isUnified(candidate));
+    if (legacy) {
+        return { path: legacy, args: [] };
+    }
+    if (found.length > 0) {
+        return { path: found[0], args: ['server'] };
     }
 
     throw new Error(

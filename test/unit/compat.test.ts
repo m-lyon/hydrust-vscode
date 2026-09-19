@@ -11,6 +11,7 @@ import {
     PROBE_TIMEOUT_MS,
     ResolvedBinary,
     ServerCompat,
+    probeBinaryVersion,
 } from '../../src/common/compat';
 import { FEATURE_PULL_DIAGNOSTICS, FEATURE_WATCHED_FILES } from '../../src/common/compatTable';
 import {
@@ -230,6 +231,16 @@ describe('the probe cache', () => {
 
         expect(compat.versionLabel).toBe('unknown version');
         expect(Date.now() - started).toBeLessThan(1000);
+    });
+
+    it.skipIf(process.platform === 'win32')('asks again past a remembered null when told to retry', async () => {
+        const script = writeScript('slow-first-server', 'echo "hydrust 0.5.0"');
+        stub.globalState.set(PROBE_CACHE_KEY, { [fingerprintOf(script)]: null });
+
+        const version = await probeBinaryVersion(script, asExtensionContext(context), undefined, true);
+
+        expect(version).toBeDefined();
+        expect(probeCache()[fingerprintOf(script)]).toBe('v0.5.0');
     });
 
     it('reuses a remembered version instead of asking again', async () => {

@@ -39,17 +39,29 @@ export interface StartedServer {
 }
 
 /**
+ * Whether a binary is called `hydrust`. Windows file names are
+ * case-insensitive and `which` can hand back `hydrust.EXE`.
+ */
+function isHydrustBinary(binaryPath: string): boolean {
+    return path.basename(binaryPath).toLowerCase().replace(/\.exe$/, '') === DISPLAY_NAME;
+}
+
+/**
  * Whether a binary called `hydrust` can be launched as a language server.
  *
  * A pre-merge `hydrust` is the CLI, which answers --version but exits 2 on
  * `server`. Only a merged release is a language server. Anything not called
- * `hydrust` is assumed to be one.
+ * `hydrust` is assumed to be one. An unknown version is accepted only when
+ * `allowUnknown` is set.
  */
-function isUsableServer(binaryPath: string, version: ServerVersion | undefined): boolean {
-    if (path.basename(binaryPath, '.exe') !== DISPLAY_NAME) {
+function isUsableServer(binaryPath: string, version: ServerVersion | undefined, allowUnknown = false): boolean {
+    if (!isHydrustBinary(binaryPath)) {
         return true;
     }
-    return !!version && isAtLeast(version, UNIFIED_BINARY_VERSION);
+    if (!version) {
+        return allowUnknown;
+    }
+    return isAtLeast(version, UNIFIED_BINARY_VERSION);
 }
 
 /**
@@ -62,10 +74,11 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
     // 1. User-specified path takes priority
     if (settings.path.length > 0) {
         if (await fsapi.pathExists(settings.path)) {
-            const version = path.basename(settings.path, '.exe') === DISPLAY_NAME
+            const version = isHydrustBinary(settings.path)
                 ? await probeBinaryVersion(settings.path, context)
                 : undefined;
-            if (isUsableServer(settings.path, version)) {
+            // Respect the user's choice unless the binary is known to be too old.
+            if (isUsableServer(settings.path, version, true)) {
                 logger.info(`Using 'path' setting: ${settings.path}`);
                 return { path: settings.path, source: 'serverPath' };
             }
@@ -94,7 +107,12 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
                 if (!environmentPath) {
                     continue;
                 }
-                const version = await probeBinaryVersion(environmentPath, context);
+                let version = await probeBinaryVersion(environmentPath, context);
+                if (!version && isHydrustBinary(environmentPath)) {
+                    // A remembered failure may just have been a slow first
+                    // run, so ask again before ruling a hydrust out.
+                    version = await probeBinaryVersion(environmentPath, context, undefined, true);
+                }
                 if (!isUsableServer(environmentPath, version)) {
                     logger.info(
                         `Ignoring ${environmentPath}: not ${DISPLAY_NAME} ` +
