@@ -2,7 +2,7 @@
  * A stand-in for the 'vscode' module, used by the hermetic unit tests.
  *
  * The real module only exists inside a running extension host, so vitest is
- * configured (see vitest.config.ts) to resolve every `import 'vscode'` to this
+ * configured (see vitest.config.mts) to resolve every `import 'vscode'` to this
  * file instead. Only the small slice of the API the compatibility layer touches
  * is implemented here, and every interesting call is recorded so a test can
  * check what the extension did rather than guessing.
@@ -22,6 +22,13 @@ export interface RecordedMessage {
     kind: 'warning' | 'information' | 'error';
     message: string;
     items: string[];
+}
+
+/** One `window.withProgress` call, with the messages reported to it. */
+export interface RecordedProgress {
+    title: string;
+    messages: string[];
+    settled: boolean;
 }
 
 /** The shape `WorkspaceConfiguration.inspect` hands back. */
@@ -78,6 +85,8 @@ export interface VscodeStubState {
     messages: RecordedMessage[];
     /** Status bar items handed out by `window.createStatusBarItem`. */
     statusBarItems: StubStatusBarItem[];
+    /** Every `window.withProgress` call, oldest first. */
+    progressNotifications: RecordedProgress[];
     /** Lines written to the output channel, as `level: text`. */
     logs: string[];
     /** What `workspace.getConfiguration(...).inspect(key)` should return. */
@@ -95,6 +104,7 @@ function freshState(): VscodeStubState {
         commands: [],
         messages: [],
         statusBarItems: [],
+        progressNotifications: [],
         logs: [],
         configInspect: new Map<string, InspectResult>(),
         configurationRequests: [],
@@ -189,7 +199,28 @@ export const window = {
         stub.messages.push({ kind: 'error', message, items });
         return Promise.resolve(undefined);
     },
+
+    withProgress: <T>(
+        options: { title?: string },
+        task: (progress: { report(value: { message?: string }): void }) => Promise<T>
+    ): Promise<T> => {
+        const record: RecordedProgress = { title: options?.title ?? '', messages: [], settled: false };
+        stub.progressNotifications.push(record);
+        const result = task({
+            report: (value) => {
+                if (value.message !== undefined) {
+                    record.messages.push(value.message);
+                }
+            },
+        });
+        void result.finally(() => {
+            record.settled = true;
+        });
+        return result;
+    },
 };
+
+export const ProgressLocation = { SourceControl: 1, Window: 10, Notification: 15 };
 
 export const commands = {
     executeCommand: (command: string, ...args: unknown[]) => {
@@ -220,6 +251,7 @@ export const workspace = {
  */
 export function createStubExtensionContext(extensionPath = '/tmp/hydrust'): {
     extensionPath: string;
+    globalStorageUri: Uri;
     subscriptions: { dispose(): void }[];
     globalState: {
         get<T>(key: string, defaultValue?: T): T | undefined;
@@ -230,6 +262,7 @@ export function createStubExtensionContext(extensionPath = '/tmp/hydrust'): {
 } {
     return {
         extensionPath,
+        globalStorageUri: Uri.file(`${extensionPath}/globalStorage`),
         subscriptions: [],
         globalState: {
             get<T>(key: string, defaultValue?: T): T | undefined {

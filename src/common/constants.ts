@@ -16,6 +16,20 @@ import {
  */
 export const PATH_CANDIDATES: readonly string[] = BINARY_NAME_CANDIDATES;
 
+/** The GitHub repository the server is released from, as `owner/name`. */
+export const SERVER_REPO = 'm-lyon/hydra-lsp';
+
+/**
+ * A server release known to have an archive for every supported platform.
+ *
+ * Used when `latest` cannot be resolved and nothing is installed yet. Release
+ * asset downloads are not subject to the GitHub API rate limit, so this still
+ * works when the API is refusing requests. The release workflow rewrites it to
+ * the newest suitable release before packaging (scripts/pin-server-version.mjs),
+ * so the value committed here only has to be a working floor.
+ */
+export const FALLBACK_SERVER_VERSION = 'v0.4.2';
+
 /**
  * Platform information for binary downloads
  */
@@ -79,7 +93,7 @@ export function getPlatformInfo(): PlatformInfo {
  */
 export function getDownloadUrl(version: string, platformInfo: PlatformInfo): string {
     const filename = getArchiveFileName(platformInfo, version);
-    return `https://github.com/m-lyon/hydra-lsp/releases/download/${version}/${filename}`;
+    return `https://github.com/${SERVER_REPO}/releases/download/${version}/${filename}`;
 }
 
 /**
@@ -130,7 +144,7 @@ export function getArchiveFileNameCandidates(platformInfo: PlatformInfo): string
  * dependency on the extension host.
  */
 export interface ExtensionPaths {
-    extensionPath: string;
+    globalStorageUri: { fsPath: string };
 }
 
 /**
@@ -150,10 +164,14 @@ export function getExecutablePath(context: ExtensionPaths, version: string): str
 
 /**
  * Get the root directory that holds all per-version subdirectories of the
- * bundled server.
+ * downloaded server.
+ *
+ * This lives in global storage rather than under the extension's install
+ * directory, because that directory is replaced on every extension update and
+ * would take every downloaded binary with it.
  */
 export function getLibsRoot(context: ExtensionPaths): string {
-    return path.join(context.extensionPath, 'bundled', 'libs');
+    return path.join(context.globalStorageUri.fsPath, 'libs');
 }
 
 /**

@@ -2,7 +2,7 @@
   "name": "hydrust",
   "displayName": "Hydrust",
   "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "m-lyon",
   "license": "MIT",
   "repository": {
@@ -196,10 +196,10 @@
     "vscode:prepublish": "npm run package",
     "lint": "eslint src test --ext ts",
     "format": "prettier --write \"src/**/*.ts\"",
-    "test": "vitest run --config vitest.config.ts",
-    "test:watch": "vitest --config vitest.config.ts",
-    "test:contract": "vitest run --config vitest.oob.config.ts test/oob/contract.test.ts",
-    "test:table-audit": "vitest run --config vitest.oob.config.ts test/oob/tableAudit.test.ts"
+    "test": "vitest run --config vitest.config.mts",
+    "test:watch": "vitest --config vitest.config.mts",
+    "test:contract": "vitest run --config vitest.oob.config.mts test/oob/contract.test.ts",
+    "test:table-audit": "vitest run --config vitest.oob.config.mts test/oob/tableAudit.test.ts"
   },
   "dependencies": {
     "@vscode/python-extension": "^1.0.5",

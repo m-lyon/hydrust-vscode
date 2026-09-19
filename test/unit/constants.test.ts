@@ -22,8 +22,8 @@ import {
 
 const platformInfo = getPlatformInfo();
 
-/** The extension root the path helpers hang everything off. */
-const context = { extensionPath: path.join('/tmp', 'hydrust-extension') };
+/** The extension context the path helpers hang everything off. */
+const context = { globalStorageUri: { fsPath: path.join('/tmp', 'hydrust-global-storage') } };
 
 /** Where a given version's executable is expected to land, as path segments. */
 function executableSegments(version: string): string[] {
@@ -93,7 +93,7 @@ describe('the executable path', () => {
         ]);
     });
 
-    it('keeps the two namings apart, so both installs can sit under bundled/libs', () => {
+    it('keeps the two namings apart, so both installs can sit under the same libs root', () => {
         expect(getExecutablePath(context, '0.4.0')).not.toBe(getExecutablePath(context, '0.5.0'));
     });
 });

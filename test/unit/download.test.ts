@@ -1,94 +1,185 @@
 /**
- * Tests for resolving which server release to use and which binary on disk it
- * corresponds to.
+ * Tests for how the downloaded server is found, resolved and installed.
  *
- * Both questions are answered before anything has been launched, so they can
- * only come from the version table. The interesting cases are all around the
- * rename: a releases list holding both namings, and a `bundled/libs` tree
- * holding an install from either side of it.
- *
- * The GitHub API is replaced with a recording stub, and every scenario leaves
- * the expected executable already on disk so nothing is ever downloaded.
+ * `https` is replaced with a routing stub so each test decides exactly what
+ * GitHub answers, including outright failures, and can check which requests
+ * were made. Archives are real tar.xz files so the extraction path runs too.
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 import type * as vscode from 'vscode';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-/** What the stubbed GitHub API should answer with, and what it was asked. */
-const httpsStub = vi.hoisted(() => ({
-    /** Response body, already serialised. */
-    body: '[]',
-    /** Status code the response carries. */
-    statusCode: 200,
-    /** The request paths, oldest first. */
-    paths: [] as string[],
+interface Reply {
+    status: number;
+    headers?: Record<string, string>;
+    body?: string | Buffer;
+}
+
+/** A URL either gets a fixed reply, a reply built from the request, or a connection error. */
+type Route = Reply | ((headers: Record<string, string>) => Reply) | 'network-error' | 'timeout' | 'stall-midway';
+
+const net = vi.hoisted(() => ({
+    routes: new Map<string, unknown>(),
+    calls: [] as { method: string; url: string; headers: Record<string, string> }[],
 }));
 
 vi.mock('https', async () => {
     const { EventEmitter } = await import('events');
+    const { Readable } = await import('stream');
 
-    const get = (options: unknown, callback: (response: unknown) => void) => {
-        httpsStub.paths.push(
-            typeof options === 'string' ? options : String((options as { path?: string }).path)
-        );
-
-        const response: InstanceType<typeof EventEmitter> & { statusCode?: number } = new EventEmitter();
-        response.statusCode = httpsStub.statusCode;
-
-        // Answer on a later tick, so the caller has chained its .on('error')
-        // handler before anything is emitted.
-        setImmediate(() => {
-            callback(response);
-            response.emit('data', httpsStub.body);
-            response.emit('end');
+    function request(
+        url: string,
+        options: { method?: string; headers?: Record<string, string> },
+        callback: (response: unknown) => void
+    ) {
+        let response: { destroy(err: Error): void } | undefined;
+        const req = Object.assign(new EventEmitter(), {
+            destroy: (err: Error) =>
+                setImmediate(() => {
+                    response?.destroy(err);
+                    req.emit('error', err);
+                }),
+            end: () =>
+                setImmediate(() => {
+                    const method = options.method ?? 'GET';
+                    const headers = options.headers ?? {};
+                    net.calls.push({ method, url, headers });
+                    const route = net.routes.get(url) as Route | undefined;
+                    if (route === 'timeout') {
+                        req.emit('timeout');
+                        return;
+                    }
+                    if (route === 'stall-midway') {
+                        // Part of the body arrives, then nothing more until the idle timeout.
+                        const body = new Readable({ read: () => undefined });
+                        body.push(Buffer.alloc(1024, 1));
+                        response = Object.assign(body, { statusCode: 200, statusMessage: '', headers: {} });
+                        callback(response);
+                        setTimeout(() => req.emit('timeout'), 20);
+                        return;
+                    }
+                    if (route === undefined || route === 'network-error') {
+                        req.emit('error', new Error(`connect ECONNREFUSED (${url})`));
+                        return;
+                    }
+                    const reply = typeof route === 'function' ? route(headers) : route;
+                    const chunks = method === 'HEAD' || reply.body === undefined ? [] : [Buffer.from(reply.body)];
+                    response = Object.assign(Readable.from(chunks), {
+                        statusCode: reply.status,
+                        statusMessage: '',
+                        headers: reply.headers ?? {},
+                    });
+                    callback(response);
+                }),
         });
+        return req;
+    }
 
-        return new EventEmitter();
-    };
-
-    return { default: { get }, get };
+    return { request, default: { request } };
 });
 
-import { ensureServer, findExistingExecutable } from '../../src/common/download';
-import { getExecutablePath, getPlatformInfo } from '../../src/common/constants';
-import { createStubExtensionContext, resetVscodeStub } from '../stubs/vscode';
+import {
+    API_BACKOFF_KEY,
+    API_ETAG_CACHE_KEY,
+    FAILED_INSTALL_KEY,
+    LATEST_TAG_CACHE_KEY,
+    LATEST_TAG_TTL_MS,
+    MAX_API_BACKOFF_MS,
+    MIN_API_BACKOFF_MS,
+    PRUNE_UNUSED_MS,
+    STALE_STAGING_MS,
+    TAG_PATTERN,
+    compareVersionsDesc,
+    ensureServer,
+    findExistingExecutable,
+    markVersionUsed,
+    rateLimitRetryTime,
+    versionLastUsedKey,
+} from '../../src/common/download';
+import {
+    FALLBACK_SERVER_VERSION,
+    getArchiveFileNameCandidates,
+    getDownloadUrl,
+    getExecutablePath,
+    getLibsRoot,
+    getPlatformInfo,
+} from '../../src/common/constants';
+import { LEGACY_BINARY_NAME } from '../../src/common/compatTable';
+import { TAG_PATTERN as SCRIPT_TAG_PATTERN, compareTagsDesc, pickPinnableRelease, platformAssetsFor, rewritePin } from '../../scripts/pin-server-version.mjs';
+import { createStubExtensionContext, resetVscodeStub, stub } from '../stubs/vscode';
 
-const platformInfo = getPlatformInfo();
+const RELEASES_PAGE = 'https://github.com/m-lyon/hydra-lsp/releases/latest';
+const RELEASES_API = 'https://api.github.com/repos/m-lyon/hydra-lsp/releases?per_page=100';
 
 let scratchDir: string;
 let context: ReturnType<typeof createStubExtensionContext>;
+let archive: Buffer;
 
-/** Cast the stub context to the type the production code asks for. */
 function asExtensionContext(value: unknown): vscode.ExtensionContext {
     return value as vscode.ExtensionContext;
 }
 
-/** Put a stand-in executable where a given release would have extracted one. */
-function installVersion(version: string): string {
-    const executablePath = getExecutablePath(context, version);
-    fs.mkdirSync(path.dirname(executablePath), { recursive: true });
-    fs.writeFileSync(executablePath, 'not a program');
-    return executablePath;
+function ensure(version = 'latest') {
+    return ensureServer(version, asExtensionContext(context));
 }
 
-/** One GitHub release, with only the fields the resolver reads. */
-function release(tag: string, assetNames: string[]): unknown {
-    return { tag_name: tag, assets: assetNames.map((name) => ({ name })) };
+function assetUrl(tag: string): string {
+    return getDownloadUrl(tag, getPlatformInfo());
 }
 
-/** The asset name a release of this version publishes for this platform. */
-function assetFor(baseName: string): string {
-    return `${baseName}-${platformInfo.platform}.${platformInfo.archiveExt}`;
+/** The pre-rename asset name every fixture archive in this file is built as. */
+function assetName(): string {
+    const info = getPlatformInfo();
+    return `${LEGACY_BINARY_NAME}-${info.platform}.${info.archiveExt}`;
 }
+
+function redirectTo(tag: string): Reply {
+    return { status: 302, headers: { location: `https://github.com/m-lyon/hydra-lsp/releases/tag/${tag}` } };
+}
+
+/** Make GitHub serve a working archive and checksum for a release. */
+function publishRelease(tag: string, checksum = crypto.createHash('sha256').update(archive).digest('hex')): void {
+    net.routes.set(assetUrl(tag), { status: 200, body: archive });
+    net.routes.set(`${assetUrl(tag)}.sha256`, { status: 200, body: `${checksum}  ${assetName()}\n` });
+}
+
+/** Put a binary on disk as if a release had been installed earlier. */
+function installOnDisk(tag: string): string {
+    const executable = getExecutablePath(context, tag);
+    fs.mkdirSync(path.dirname(executable), { recursive: true });
+    fs.writeFileSync(executable, 'installed');
+    return executable;
+}
+
+function requested(url: string): number {
+    return net.calls.filter((call) => call.url === url).length;
+}
+
+beforeAll(() => {
+    // A real archive with the pre-rename layout releases used up to v0.4.x, so
+    // extraction is exercised. Every `publishRelease` call in this file uses a
+    // tag from that era; naming across the rename is covered separately.
+    const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-archive-'));
+    const info = getPlatformInfo();
+    const dirName = `${LEGACY_BINARY_NAME}-${info.platform}`;
+    const inner = path.join(buildDir, dirName);
+    fs.mkdirSync(inner);
+    fs.writeFileSync(path.join(inner, `${LEGACY_BINARY_NAME}${info.executableSuffix}`), '#!/bin/sh\n');
+    const archivePath = path.join(buildDir, 'server.tar.xz');
+    execFileSync('tar', ['-cJf', archivePath, '-C', buildDir, dirName]);
+    archive = fs.readFileSync(archivePath);
+    fs.rmSync(buildDir, { recursive: true, force: true });
+});
 
 beforeEach(() => {
     resetVscodeStub();
-    httpsStub.body = '[]';
-    httpsStub.statusCode = 200;
-    httpsStub.paths = [];
+    net.routes.clear();
+    net.calls = [];
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-download-'));
     context = createStubExtensionContext(scratchDir);
 });
@@ -97,101 +188,596 @@ afterEach(() => {
     fs.rmSync(scratchDir, { recursive: true, force: true });
 });
 
-describe('resolving the latest release', () => {
-    it('takes the newest release named the new way', async () => {
-        httpsStub.body = JSON.stringify([
-            release('v0.5.0', [assetFor('hydrust'), `${assetFor('hydrust')}.sha256`]),
-            release('v0.4.0', [assetFor('hydra-lsp')]),
-        ]);
-        installVersion('v0.5.0');
+afterAll(() => {
+    vi.restoreAllMocks();
+});
 
-        const installed = await ensureServer('latest', asExtensionContext(context));
-
-        expect(installed.version).toBe('v0.5.0');
-        expect(path.basename(installed.path)).toBe(`hydrust${platformInfo.executableSuffix}`);
-        expect(httpsStub.paths).toEqual(['/repos/m-lyon/hydra-lsp/releases']);
+describe.skipIf(process.platform === 'win32')('ensureServer', () => {
+    it('keeps downloads in global storage, which survives extension updates', () => {
+        expect(getLibsRoot(context)).toBe(path.join(context.globalStorageUri.fsPath, 'libs'));
+        expect(getLibsRoot(context).startsWith(path.join(scratchDir, 'globalStorage'))).toBe(true);
     });
 
-    it('still finds a release named the old way when that is all there is', async () => {
-        httpsStub.body = JSON.stringify([
-            release('v0.4.0', [assetFor('hydra-lsp')]),
-            release('v0.3.0', [assetFor('hydra-lsp')]),
-        ]);
-        installVersion('v0.4.0');
+    it('makes no requests when the latest tag was resolved recently and is installed', async () => {
+        const executable = installOnDisk('v0.4.0');
+        stub.globalState.set(LATEST_TAG_CACHE_KEY, { tag: 'v0.4.0', checkedAt: Date.now() - 60_000 });
 
-        const installed = await ensureServer('latest', asExtensionContext(context));
-
-        expect(installed.version).toBe('v0.4.0');
-        expect(path.basename(installed.path)).toBe(`hydra-lsp${platformInfo.executableSuffix}`);
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.4.0' });
+        expect(net.calls).toEqual([]);
     });
 
-    it('skips a release that carries neither name', async () => {
-        // Source-only releases, or a build that failed for this platform.
-        httpsStub.body = JSON.stringify([
-            release('v0.6.0', ['hydrust-some-other-target.tar.xz']),
-            release('v0.4.0', [assetFor('hydra-lsp')]),
-        ]);
-        installVersion('v0.4.0');
+    it('resolves latest from the releases page redirect, not the API, once the cache is stale', async () => {
+        const executable = installOnDisk('v0.4.2');
+        stub.globalState.set(LATEST_TAG_CACHE_KEY, { tag: 'v0.4.0', checkedAt: Date.now() - LATEST_TAG_TTL_MS - 1 });
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.4.2'));
 
-        const installed = await ensureServer('latest', asExtensionContext(context));
-
-        expect(installed.version).toBe('v0.4.0');
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.4.2' });
+        expect(net.calls.map((call) => `${call.method} ${call.url}`)).toEqual([`HEAD ${RELEASES_PAGE}`]);
+        expect(stub.globalState.get(LATEST_TAG_CACHE_KEY)).toMatchObject({ tag: 'v0.4.2' });
     });
 
-    it('says what it was looking for when no release matches', async () => {
-        httpsStub.body = JSON.stringify([release('v0.4.0', ['hydra-lsp-some-other-target.tar.xz'])]);
+    it('downloads, verifies and extracts the release the redirect points at', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.4.2'));
+        publishRelease('v0.4.2');
 
-        await expect(ensureServer('latest', asExtensionContext(context))).rejects.toThrow(
-            /No release found with an asset matching .*hydrust-.*hydra-lsp-/
+        const installed = await ensure();
+
+        expect(installed).toEqual({ path: getExecutablePath(context, 'v0.4.2'), version: 'v0.4.2' });
+        expect(fs.existsSync(installed.path)).toBe(true);
+        expect(requested(RELEASES_API)).toBe(0);
+        expect(stub.globalState.get(LATEST_TAG_CACHE_KEY)).toMatchObject({ tag: 'v0.4.2' });
+    });
+
+    it('asks the API for an older release when the latest one lacks this platform', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.5.0'));
+        net.routes.set(assetUrl('v0.5.0'), { status: 404 });
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            headers: { etag: '"abc"' },
+            body: JSON.stringify([
+                { tag_name: 'v0.5.0', assets: [{ name: 'something-else.tar.xz' }] },
+                { tag_name: 'v0.4.2', assets: [{ name: assetName() }] },
+            ]),
+        });
+        publishRelease('v0.4.2');
+
+        await expect(ensure()).resolves.toMatchObject({ version: 'v0.4.2' });
+        expect(requested(RELEASES_API)).toBe(1);
+        expect(stub.globalState.get(LATEST_TAG_CACHE_KEY)).toMatchObject({ tag: 'v0.4.2' });
+        expect(stub.globalState.get(API_ETAG_CACHE_KEY)).toEqual({ etag: '"abc"', tag: 'v0.4.2' });
+        expect(fs.existsSync(path.join(getLibsRoot(context), '0.5.0'))).toBe(false);
+    });
+
+    it('falls through to the API when the redirect tag fails to install for another reason', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.5.0'));
+        net.routes.set(assetUrl('v0.5.0'), { status: 500 });
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.4.2', assets: [{ name: assetName() }] }]),
+        });
+        publishRelease('v0.4.2');
+
+        await expect(ensure()).resolves.toMatchObject({ version: 'v0.4.2' });
+        expect(stub.globalState.get(LATEST_TAG_CACHE_KEY)).toMatchObject({ tag: 'v0.4.2' });
+    });
+
+    it('does not retry the redirect tag when the API points at the same release', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.9.0'));
+        net.routes.set(assetUrl('v0.9.0'), { status: 500 });
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.9.0', assets: [{ name: assetName() }] }]),
+        });
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(requested(assetUrl('v0.9.0'))).toBe(1);
+        expect(requested(RELEASES_API)).toBe(1);
+    });
+
+    it('skips prereleases when looking for a release through the API', async () => {
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([
+                { tag_name: 'v0.6.0-rc.1', prerelease: true, assets: [{ name: assetName() }] },
+                { tag_name: 'v0.4.2', assets: [{ name: assetName() }] },
+            ]),
+        });
+        publishRelease('v0.4.2');
+
+        await expect(ensure()).resolves.toMatchObject({ version: 'v0.4.2' });
+        expect(requested(assetUrl('v0.6.0-rc.1'))).toBe(0);
+    });
+
+    it('backs off after a rate limit and installs the fallback release without a popup', async () => {
+        const resetSeconds = Math.floor(Date.now() / 1000) + 1800;
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 403,
+            headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(resetSeconds) },
+            body: '{"message":"API rate limit exceeded"}',
+        });
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(stub.globalState.get(API_BACKOFF_KEY)).toBe(resetSeconds * 1000);
+        expect(stub.logs.some((line) => line.includes('rate limit exceeded'))).toBe(true);
+        expect(stub.messages).toEqual([]);
+        // A fallback is not a resolved latest, so the next start tries again.
+        expect(stub.globalState.has(LATEST_TAG_CACHE_KEY)).toBe(false);
+    });
+
+    it('does not call the API again while backing off', async () => {
+        stub.globalState.set(API_BACKOFF_KEY, Date.now() + 600_000);
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(requested(RELEASES_API)).toBe(0);
+    });
+
+    it('sends the stored ETag and reuses its tag on 304 Not Modified', async () => {
+        stub.globalState.set(API_ETAG_CACHE_KEY, { etag: '"abc"', tag: 'v0.4.1' });
+        const executable = installOnDisk('v0.4.1');
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, (headers: Record<string, string>) =>
+            headers['If-None-Match'] === '"abc"' ? { status: 304 } : { status: 500 }
         );
+
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.4.1' });
     });
 
-    it('does not ask GitHub anything when the version is pinned', async () => {
-        installVersion('v0.4.0');
+    it('prefers an installed binary over downloading the fallback when GitHub is unreachable', async () => {
+        const executable = installOnDisk('v0.3.0');
 
-        const installed = await ensureServer('0.4.0', asExtensionContext(context));
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.3.0' });
+        expect(requested(assetUrl(FALLBACK_SERVER_VERSION))).toBe(0);
+    });
 
-        expect(installed.version).toBe('v0.4.0');
-        expect(httpsStub.paths).toEqual([]);
+    it('prefers an installed release over a newer installed prerelease when GitHub is unreachable', async () => {
+        const executable = installOnDisk('v0.5.0');
+        installOnDisk('v0.6.0-rc.1');
+
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.5.0' });
+    });
+
+    it('does not remember a timed out download as a failed install', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.9.0'));
+        net.routes.set(assetUrl('v0.9.0'), 'timeout');
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(stub.globalState.get(FAILED_INSTALL_KEY)).toBeUndefined();
+    });
+
+    it('fails when nothing can be resolved, downloaded or found on disk', async () => {
+        await expect(ensure()).rejects.toThrow();
+    });
+
+    it('reports why the latest release failed when the fallback download fails too', async () => {
+        stub.globalState.set(API_BACKOFF_KEY, Date.now() + 600_000);
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.9.0'));
+        net.routes.set(assetUrl('v0.9.0'), 'timeout');
+        net.routes.set(assetUrl(FALLBACK_SERVER_VERSION), 'timeout');
+
+        const error = await ensure().catch((err: Error) => err);
+
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain(`fallback ${FALLBACK_SERVER_VERSION}`);
+        expect((error as Error).message).toContain(assetUrl('v0.9.0'));
+        expect(stub.logs.some((line) => line.includes('Could not install v0.9.0'))).toBe(true);
+        expect(stub.logs.some((line) => line.includes('rate limited until'))).toBe(true);
+        expect(requested(RELEASES_API)).toBe(0);
+    });
+
+    it('marks an already installed version used before handing out its path', async () => {
+        installOnDisk('v0.3.0');
+        const stale = Date.now() - PRUNE_UNUSED_MS - 60_000;
+        stub.globalState.set(versionLastUsedKey('0.3.0'), stale);
+
+        await ensure('v0.3.0');
+
+        expect(stub.globalState.get(versionLastUsedKey('0.3.0'))).toBeGreaterThan(stale);
+    });
+
+    it('leaves no last-used record for a version whose install failed', async () => {
+        net.routes.set(assetUrl('v0.5.0'), { status: 404 });
+
+        await expect(ensure('v0.5.0')).rejects.toThrow();
+
+        expect(stub.globalState.get(versionLastUsedKey('0.5.0'))).toBeUndefined();
+    });
+
+    it('uses an explicitly configured version without resolving anything', async () => {
+        const executable = installOnDisk('v0.3.0');
+
+        await expect(ensure('0.3.0')).resolves.toEqual({ path: executable, version: 'v0.3.0' });
+        expect(net.calls).toEqual([]);
+    });
+
+    it('removes a failed install so it is not mistaken for a usable one', async () => {
+        publishRelease('v0.3.0', '0'.repeat(64));
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('Checksum verification failed');
+        expect(fs.existsSync(path.join(getLibsRoot(context), '0.3.0'))).toBe(false);
+        // The download got far enough to open a progress notification; it must
+        // still be settled, not left open forever, once the install fails.
+        expect(stub.progressNotifications).toHaveLength(1);
+        expect(stub.progressNotifications[0].settled).toBe(true);
+    });
+
+    it('opens no progress notification when the release has no archive for this platform', async () => {
+        net.routes.set(assetUrl('v0.5.0'), { status: 404 });
+
+        await expect(ensure('v0.5.0')).rejects.toThrow();
+
+        expect(stub.progressNotifications).toEqual([]);
+    });
+
+    it('uses the install another window finished while this one was downloading', async () => {
+        publishRelease('v0.3.0');
+        const checksum = net.routes.get(`${assetUrl('v0.3.0')}.sha256`) as Reply;
+        net.routes.set(`${assetUrl('v0.3.0')}.sha256`, () => {
+            installOnDisk('v0.3.0');
+            return checksum;
+        });
+
+        const installed = await ensure('v0.3.0');
+
+        expect(fs.readFileSync(installed.path, 'utf8')).toBe('installed');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual(['0.3.0']);
+    });
+
+    it('replaces a leftover install directory that has no executable', async () => {
+        publishRelease('v0.3.0');
+        const leftover = path.join(getLibsRoot(context), '0.3.0', 'leftover');
+        fs.mkdirSync(leftover, { recursive: true });
+        const old = new Date(Date.now() - STALE_STAGING_MS - 60_000);
+        fs.utimesSync(leftover, old, old);
+        fs.utimesSync(path.dirname(leftover), old, old);
+
+        const installed = await ensure('v0.3.0');
+
+        expect(fs.readFileSync(installed.path, 'utf8')).toBe('#!/bin/sh\n');
+        expect(fs.existsSync(path.join(getLibsRoot(context), '0.3.0', 'leftover'))).toBe(false);
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual(['0.3.0']);
+    });
+
+    it('removes abandoned staging directories but leaves recent ones', async () => {
+        publishRelease('v0.3.0');
+        const stale = path.join(getLibsRoot(context), '.staging-0.2.0-stale');
+        const recent = path.join(getLibsRoot(context), '.staging-0.2.0-recent');
+        fs.mkdirSync(stale, { recursive: true });
+        fs.mkdirSync(recent, { recursive: true });
+        const old = new Date(Date.now() - STALE_STAGING_MS - 60_000);
+        fs.utimesSync(stale, old, old);
+
+        await ensure('v0.3.0');
+
+        expect(fs.existsSync(stale)).toBe(false);
+        expect(fs.existsSync(recent)).toBe(true);
+    });
+
+    it('ignores a latest tag that is not a plain version', async () => {
+        net.routes.set(RELEASES_PAGE, redirectTo('%2E%2E%2Fescape'));
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(net.calls.some((call) => call.url.includes('escape') && call.url !== RELEASES_PAGE)).toBe(false);
+    });
+
+    it('rejects a configured version that is not a plain version', async () => {
+        await expect(ensure('../escape')).rejects.toThrow('Invalid hydrust.serverVersion');
+        expect(net.calls).toEqual([]);
+    });
+
+    it('follows the redirect GitHub serves for release assets', async () => {
+        publishRelease('v0.3.0');
+        const cdn = 'https://objects.githubusercontent.com/archive';
+        net.routes.set(cdn, net.routes.get(assetUrl('v0.3.0')));
+        net.routes.set(assetUrl('v0.3.0'), { status: 302, headers: { location: cdn } });
+
+        const installed = await ensure('v0.3.0');
+
+        expect(fs.readFileSync(installed.path, 'utf8')).toBe('#!/bin/sh\n');
+        expect(requested(cdn)).toBe(1);
+    });
+
+    it('resolves a relative redirect location against the asset URL', async () => {
+        publishRelease('v0.3.0');
+        const target = new URL('/mirror/archive', assetUrl('v0.3.0')).toString();
+        net.routes.set(target, net.routes.get(assetUrl('v0.3.0')));
+        net.routes.set(assetUrl('v0.3.0'), { status: 302, headers: { location: '/mirror/archive' } });
+
+        await expect(ensure('v0.3.0')).resolves.toMatchObject({ version: 'v0.3.0' });
+        expect(requested(target)).toBe(1);
+    });
+
+    it('gives up on a redirect loop', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(assetUrl('v0.3.0'), { status: 302, headers: { location: assetUrl('v0.3.0') } });
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('Too many redirects');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
+    });
+
+    it('abandons a download that times out and leaves no partial archive', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(assetUrl('v0.3.0'), 'timeout');
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('timed out');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
+    });
+
+    it('abandons a download that stalls partway through the body and removes the partial archive', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(assetUrl('v0.3.0'), 'stall-midway');
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('timed out');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
+    });
+
+    it('leaves a recently changed install directory alone, since another window may be finishing it', async () => {
+        publishRelease('v0.3.0');
+        const recent = path.join(getLibsRoot(context), '0.3.0', 'in-progress');
+        fs.mkdirSync(recent, { recursive: true });
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('already exists without the server executable');
+        expect(fs.existsSync(recent)).toBe(true);
+    });
+
+    it('fails the install when the checksum request times out', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(`${assetUrl('v0.3.0')}.sha256`, 'timeout');
+
+        await expect(ensure('v0.3.0')).rejects.toThrow('timed out');
+        expect(fs.readdirSync(getLibsRoot(context))).toEqual([]);
+    });
+
+    it('installs without verification when the release has no checksum file', async () => {
+        publishRelease('v0.3.0');
+        net.routes.set(`${assetUrl('v0.3.0')}.sha256`, { status: 404 });
+
+        await expect(ensure('v0.3.0')).resolves.toMatchObject({ version: 'v0.3.0' });
+    });
+
+    it('keeps only the new install and the newest previous one', async () => {
+        installOnDisk('v0.1.0');
+        installOnDisk('v0.2.0');
+        installOnDisk('v0.2.5');
+        publishRelease('v0.3.0');
+
+        await ensure('v0.3.0');
+
+        expect(fs.readdirSync(getLibsRoot(context)).sort()).toEqual(['0.2.5', '0.3.0']);
+    });
+
+    it('keeps a version another window used recently when installing a different one', async () => {
+        installOnDisk('v0.1.0');
+        await ensure('v0.1.0');
+        installOnDisk('v0.2.0');
+        installOnDisk('v0.2.5');
+        stub.globalState.set(versionLastUsedKey('0.2.0'), Date.now() - PRUNE_UNUSED_MS - 60_000);
+        publishRelease('v0.3.0');
+
+        await ensure('v0.3.0');
+
+        expect(fs.readdirSync(getLibsRoot(context)).sort()).toEqual(['0.1.0', '0.2.5', '0.3.0']);
+    });
+
+    it('records last-used time per version, so two windows marking different versions used at once do not clobber each other', async () => {
+        installOnDisk('v0.1.0');
+        installOnDisk('v0.2.0');
+
+        await Promise.all([
+            markVersionUsed(asExtensionContext(context), 'v0.1.0'),
+            markVersionUsed(asExtensionContext(context), 'v0.2.0'),
+        ]);
+
+        expect(stub.globalState.has(versionLastUsedKey('0.1.0'))).toBe(true);
+        expect(stub.globalState.has(versionLastUsedKey('0.2.0'))).toBe(true);
+    });
+
+    it('backs off after a 403 whose body reports a secondary rate limit', async () => {
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 403,
+            body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}',
+        });
+        publishRelease(FALLBACK_SERVER_VERSION);
+        const before = Date.now();
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(stub.globalState.get(API_BACKOFF_KEY)).toBeGreaterThanOrEqual(before + MIN_API_BACKOFF_MS);
+    });
+
+    it('spares the newest usable previous install rather than a newer broken directory', async () => {
+        installOnDisk('v0.2.0');
+        fs.mkdirSync(path.join(getLibsRoot(context), '0.2.5'), { recursive: true });
+        publishRelease('v0.3.0');
+
+        await ensure('v0.3.0');
+
+        expect(fs.readdirSync(getLibsRoot(context)).sort()).toEqual(['0.2.0', '0.3.0']);
+    });
+
+    it('treats a 403 without rate-limit headers as an ordinary failure', async () => {
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, { status: 403, body: '{"message":"Forbidden"}' });
+        publishRelease(FALLBACK_SERVER_VERSION);
+
+        await expect(ensure()).resolves.toMatchObject({ version: FALLBACK_SERVER_VERSION });
+        expect(stub.globalState.has(API_BACKOFF_KEY)).toBe(false);
+        expect(stub.logs.some((line) => line.includes('rate limit exceeded'))).toBe(false);
+        expect(stub.logs.some((line) => line.includes('returned status 403'))).toBe(true);
+    });
+
+    it('shares one resolution between concurrent callers', async () => {
+        installOnDisk('v0.4.2');
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.4.2'));
+
+        const [first, second] = await Promise.all([ensure(), ensure()]);
+
+        expect(first).toEqual(second);
+        expect(requested(RELEASES_PAGE)).toBe(1);
     });
 });
 
-describe('finding a previously installed binary', () => {
-    it('picks the newest across installs from either side of the rename', async () => {
-        installVersion('v0.4.0');
-        const newer = installVersion('v0.5.0');
+describe.skipIf(process.platform === 'win32')('naming across the server rename', () => {
+    it('accepts a release published under the new (hydrust) asset name', async () => {
+        const [newName] = getArchiveFileNameCandidates(getPlatformInfo());
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.5.0', assets: [{ name: newName }] }]),
+        });
+        const executable = installOnDisk('v0.5.0');
+
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.5.0' });
+    });
+
+    it('still accepts a release published under the old (hydra-lsp) asset name', async () => {
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.4.0', assets: [{ name: assetName() }] }]),
+        });
+        const executable = installOnDisk('v0.4.0');
+
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.4.0' });
+    });
+
+    it('warns when a matched release names the archive differently than the table expects', async () => {
+        // The table says v0.5.0 should carry the new name; this release still
+        // carries the old one, which is exactly the naming-table-out-of-date
+        // scenario the warning exists for.
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.5.0', assets: [{ name: assetName() }] }]),
+        });
+        installOnDisk('v0.5.0');
+
+        await ensure();
+
+        expect(stub.logs.some((line) => line.includes('naming table is out of date'))).toBe(true);
+    });
+
+    it('finds the newest installed binary across both sides of the rename', async () => {
+        installOnDisk('v0.4.0');
+        const newer = installOnDisk('v0.5.0');
 
         const found = await findExistingExecutable(asExtensionContext(context));
 
         expect(found).toEqual({ path: newer, version: 'v0.5.0' });
     });
+});
 
-    it('falls back to the older install when it is the only complete one', async () => {
-        const older = installVersion('v0.4.0');
-        // A directory left half-extracted: the version directory is there but
-        // the executable never landed.
-        fs.mkdirSync(path.dirname(getExecutablePath(context, 'v0.5.0')), { recursive: true });
+describe('rateLimitRetryTime', () => {
+    const now = 1_000_000_000_000;
 
-        const found = await findExistingExecutable(asExtensionContext(context));
-
-        expect(found).toEqual({ path: older, version: 'v0.4.0' });
+    it('honours retry-after first', () => {
+        expect(rateLimitRetryTime({ 'retry-after': '120', 'x-ratelimit-remaining': '0' }, now)).toBe(now + 120_000);
     });
 
-    it('ignores an executable filed under a version that does not name it that way', async () => {
-        // A v0.6.0 directory holding a `hydra-lsp` binary is not something the
-        // extension ever writes, and running it would mean launching a
-        // pre-subcommand server with `server` on its command line.
-        installVersion('v0.4.0');
-        const strayDir = path.join(scratchDir, 'bundled', 'libs', '0.6.0', `hydra-lsp-${platformInfo.platform}`);
-        fs.mkdirSync(strayDir, { recursive: true });
-        fs.writeFileSync(path.join(strayDir, 'hydra-lsp'), 'not a program');
-
-        const found = await findExistingExecutable(asExtensionContext(context));
-
-        expect(found?.version).toBe('v0.4.0');
+    it('waits for the reset time once the quota is spent', () => {
+        expect(rateLimitRetryTime({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 900) }, now))
+            .toBe(now + 900_000);
     });
 
-    it('finds nothing when there is nothing to find', async () => {
-        expect(await findExistingExecutable(asExtensionContext(context))).toBeUndefined();
+    it('waits at least a minute otherwise', () => {
+        expect(rateLimitRetryTime({}, now)).toBe(now + MIN_API_BACKOFF_MS);
+        expect(rateLimitRetryTime({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000) }, now))
+            .toBe(now + MIN_API_BACKOFF_MS);
+    });
+
+    it('never backs off longer than the cap', () => {
+        expect(rateLimitRetryTime({ 'retry-after': '99999999' }, now)).toBe(now + MAX_API_BACKOFF_MS);
+        expect(rateLimitRetryTime({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 86_400 * 365) }, now))
+            .toBe(now + MAX_API_BACKOFF_MS);
+    });
+});
+
+describe('the release pin script', () => {
+    it('checks for exactly the archives the extension can download', () => {
+        const combos = [
+            ['win32', 'x64'],
+            ['darwin', 'arm64'],
+            ['darwin', 'x64'],
+            ['linux', 'arm64'],
+            ['linux', 'x64'],
+        ];
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        const arch = Object.getOwnPropertyDescriptor(process, 'arch')!;
+        try {
+            const names = combos.map(([p, a]) => {
+                Object.defineProperty(process, 'platform', { value: p });
+                Object.defineProperty(process, 'arch', { value: a });
+                return assetName();
+            });
+            expect([...names].sort()).toEqual([...platformAssetsFor('v0.4.2')].sort());
+        } finally {
+            Object.defineProperty(process, 'platform', platform);
+            Object.defineProperty(process, 'arch', arch);
+        }
+    });
+
+    it('picks the newest stable release that has every archive', () => {
+        const legacy = platformAssetsFor('v0.4.2').map((name) => ({ name }));
+        expect(
+            pickPinnableRelease([
+                { tag_name: 'v0.6.0', prerelease: true, assets: legacy },
+                { tag_name: 'v0.5.0', assets: legacy.slice(1) },
+                { tag_name: 'v0.4.2', assets: legacy },
+                { tag_name: 'v0.4.1', assets: legacy },
+            ])
+        ).toBe('v0.4.2');
+        expect(pickPinnableRelease([])).toBeUndefined();
+    });
+
+    it('picks a release named the new way once the naming era moves on', () => {
+        const unified = platformAssetsFor('v0.5.0').map((name) => ({ name }));
+        const legacy = platformAssetsFor('v0.4.2').map((name) => ({ name }));
+        expect(
+            pickPinnableRelease([
+                { tag_name: 'v0.5.0', assets: unified },
+                { tag_name: 'v0.4.2', assets: legacy },
+            ])
+        ).toBe('v0.5.0');
+        // A v0.5.0+ release only carrying the old asset names is incomplete for
+        // its own era, even though the names happen to exist as strings.
+        expect(
+            pickPinnableRelease([{ tag_name: 'v0.5.0', assets: legacy }])
+        ).toBeUndefined();
+    });
+
+    it('accepts exactly the tags the extension accepts', () => {
+        expect(SCRIPT_TAG_PATTERN.source).toBe(TAG_PATTERN.source);
+        expect(SCRIPT_TAG_PATTERN.flags).toBe(TAG_PATTERN.flags);
+    });
+
+    it('orders tags exactly as the extension does', () => {
+        const tags = ['v0.6.0', 'v0.6.0-hotfix.1', 'v0.10.0', 'v0.6.1', '0.6.0.1', 'v0.5.9-rc', 'v0.5.9'];
+        const script = [...tags].sort(compareTagsDesc);
+        const extension = [...tags].sort((a, b) => compareVersionsDesc(a.replace(/^v/, ''), b.replace(/^v/, '')));
+        expect(script).toEqual(extension);
+        expect(script.indexOf('v0.6.0')).toBeLessThan(script.indexOf('v0.6.0-hotfix.1'));
+        expect(script.indexOf('v0.6.0-hotfix.1')).toBeLessThan(script.indexOf('v0.5.9'));
+        expect(script.indexOf('v0.5.9')).toBeLessThan(script.indexOf('v0.5.9-rc'));
+        expect(['v0.5.9-rc', 'v0.5.9'].sort(compareTagsDesc)).toEqual(['v0.5.9', 'v0.5.9-rc']);
+        expect(['0.5.9-rc', '0.5.9'].sort(compareVersionsDesc)).toEqual(['0.5.9', '0.5.9-rc']);
+        expect(['1.0.0-rc.2', '1.0.0'].sort(compareVersionsDesc)).toEqual(['1.0.0', '1.0.0-rc.2']);
+        expect(['v1.0.0-rc.2', 'v1.0.0'].sort(compareTagsDesc)).toEqual(['v1.0.0', 'v1.0.0-rc.2']);
+        expect(['1.0.0-rc.2', '1.0.0-rc.10'].sort(compareVersionsDesc)).toEqual(['1.0.0-rc.10', '1.0.0-rc.2']);
+    });
+
+    it('rewrites the pin in constants.ts and nothing else', () => {
+        const source = fs.readFileSync(path.resolve(__dirname, '../../src/common/constants.ts'), 'utf8');
+        const rewritten = rewritePin(source, 'v9.9.9');
+
+        expect(rewritten).toContain("export const FALLBACK_SERVER_VERSION = 'v9.9.9';");
+        expect(rewritten.replace('v9.9.9', FALLBACK_SERVER_VERSION)).toBe(source);
+        expect(() => rewritePin('nothing here', 'v1.0.0')).toThrow();
     });
 });

@@ -5,7 +5,7 @@ import { logger } from './logger';
 import { PATH_CANDIDATES } from './constants';
 import { SERVER_ARGS } from './compatTable';
 import { ExtensionSettings } from './settings';
-import { ensureServer, findExistingExecutable } from './download';
+import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
 import { ResolvedBinary, ServerCompat } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
@@ -14,7 +14,11 @@ import {
     LanguageClientOptions,
     ServerOptions,
     Executable,
+    State,
 } from 'vscode-languageclient/node';
+
+/** How often a running bundled server re-records its version as used, so other windows do not prune it. */
+const MARK_USED_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * A running server, together with what the extension knows about what it
@@ -62,13 +66,19 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
         const installed = await ensureServer(settings.serverVersion, context);
         return { path: installed.path, source: 'bundled', version: installed.version };
     } catch (err) {
+        if (err instanceof InvalidServerVersionError) {
+            throw err;
+        }
         // ensureServer can fail for network/API reasons (GitHub down, offline,
         // unexpected payload, etc.). Before giving up, look for a previously
         // downloaded binary on disk so the extension can still start.
         logger.warn(`ensureServer failed: ${err}`);
-        const cached = await findExistingExecutable(context);
+        // `latest` already falls back to installed binaries inside ensureServer.
+        const isLatest = settings.serverVersion === 'latest' || !settings.serverVersion;
+        const cached = isLatest ? undefined : await findExistingExecutable(context);
         if (cached) {
             logger.warn(`Falling back to previously installed binary: ${cached.path}`);
+            await markVersionUsed(context, cached.version);
             return { path: cached.path, source: 'bundled', version: cached.version };
         }
         logger.error('No previously installed binary available to fall back to.');
@@ -139,6 +149,21 @@ export async function startServer(
 
     // Create and start the client
     const client = new LanguageClient(serverId, serverName, serverOptions, clientOptions);
+
+    const bundledVersion = binary.source === 'bundled' ? binary.version : undefined;
+    if (bundledVersion) {
+        let refresh: NodeJS.Timeout | undefined;
+        const markUsed = () => void markVersionUsed(context, bundledVersion).catch((err) => logger.debug(`Could not record server use: ${err}`));
+        client.onDidChangeState(({ newState }) => {
+            if (newState === State.Running) {
+                markUsed();
+                refresh ??= setInterval(markUsed, MARK_USED_INTERVAL_MS);
+            } else if (newState === State.Stopped && refresh) {
+                clearInterval(refresh);
+                refresh = undefined;
+            }
+        });
+    }
 
     try {
         await client.start();
