@@ -436,6 +436,38 @@ describe('looking for a server on PATH', () => {
         expect(clientStub.clients[0].serverOptions.run.command).toBe(hydraLsp);
     });
 
+    it('skips a hydrust whose version cannot be determined and falls back to bundled', async () => {
+        const bundled = bundledFallback();
+        const hydrust = writeBinary('hydrust');
+        whichStub.paths = { hydrust };
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+
+    it('skips a hydrust.cmd shim that is the pre-merge CLI', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        const hydrust = writeBinary('hydrust.cmd');
+        whichStub.paths = { 'hydra-lsp': hydraLsp, hydrust };
+        rememberVersions({ [hydraLsp]: 'v0.4.0', [hydrust]: 'v0.4.2' });
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydraLsp);
+    });
+
+    it('prefers a merged hydrust over a hydra-lsp whose version cannot be determined', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        const hydrust = writeBinary('hydrust');
+        whichStub.paths = { 'hydra-lsp': hydraLsp, hydrust };
+        rememberVersion(hydrust, 'v0.5.0');
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydrust);
+    });
+
     it('falls back to bundled when neither name is on PATH', async () => {
         const bundled = bundledFallback();
 

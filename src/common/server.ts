@@ -29,6 +29,9 @@ import {
 /** How often a running bundled server re-records its version as used, so other windows do not prune it. */
 const MARK_USED_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+/** PATH binaries whose remembered unknown version has been re-checked this session. */
+const recheckedUnknown = new Set<string>();
+
 /**
  * A running server, together with what the extension knows about what it
  * supports.
@@ -40,10 +43,11 @@ export interface StartedServer {
 
 /**
  * Whether a binary is called `hydrust`. Windows file names are
- * case-insensitive and `which` can hand back `hydrust.EXE`.
+ * case-insensitive and `which` can hand back `hydrust.EXE` or a shim such as
+ * `hydrust.cmd`.
  */
 function isHydrustBinary(binaryPath: string): boolean {
-    return path.basename(binaryPath).toLowerCase().replace(/\.exe$/, '') === DISPLAY_NAME;
+    return path.basename(binaryPath).toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, '') === DISPLAY_NAME;
 }
 
 /**
@@ -107,12 +111,14 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
                 if (!environmentPath) {
                     continue;
                 }
-                let version = await probeBinaryVersion(environmentPath, context);
-                if (!version && isHydrustBinary(environmentPath)) {
-                    // A remembered failure may just have been a slow first
-                    // run, so ask again before ruling a hydrust out.
-                    version = await probeBinaryVersion(environmentPath, context, undefined, true);
+                // A remembered failure may just have been a slow first run,
+                // so a hydrust gets asked again once per session before it
+                // is ruled out.
+                const recheck = isHydrustBinary(environmentPath) && !recheckedUnknown.has(environmentPath);
+                if (recheck) {
+                    recheckedUnknown.add(environmentPath);
                 }
+                const version = await probeBinaryVersion(environmentPath, context, undefined, recheck);
                 if (!isUsableServer(environmentPath, version)) {
                     logger.info(
                         `Ignoring ${environmentPath}: not ${DISPLAY_NAME} ` +

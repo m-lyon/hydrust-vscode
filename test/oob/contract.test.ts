@@ -85,7 +85,11 @@ function requireBinary(): { path: string; args: string[] } {
         return { path: legacy, args: [] };
     }
     if (found.length > 0) {
-        return { path: found[0], args: ['server'] };
+        throw new Error(
+            `Found ${found.join(', ')}, but it does not report ${formatServerVersion(UNIFIED_BINARY_VERSION)} ` +
+            'or later, so it is not a language server (the pre-merge hydrust CLI?).\n' +
+            'Build hydra-lsp, or point $HYDRA_LSP_BINARY at a server binary.'
+        );
     }
 
     throw new Error(
