@@ -32,6 +32,9 @@ const MARK_USED_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** PATH binaries whose remembered unknown version has been re-checked this session. */
 const recheckedUnknown = new Set<string>();
 
+/** `serverPath` settings already warned about this session, so restarts do not repeat the toast. */
+const warnedServerPaths = new Set<string>();
+
 /**
  * A running server, together with what the extension knows about what it
  * supports.
@@ -90,10 +93,13 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
                 `Ignoring 'path' setting ${settings.path}: not ${DISPLAY_NAME} ` +
                 `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
             );
-            void vscode.window.showWarningMessage(
-                `${settings.path} is not ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} ` +
-                'or later, so it cannot run the language server. Falling back to another server.'
-            );
+            if (!warnedServerPaths.has(settings.path)) {
+                warnedServerPaths.add(settings.path);
+                void vscode.window.showWarningMessage(
+                    `${settings.path} is not ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} ` +
+                    'or later, so it cannot run the language server. Falling back to another server.'
+                );
+            }
         } else {
             logger.warn('No valid path found in settings.path');
         }

@@ -29,6 +29,7 @@ import {
     FEATURE_WATCHED_FILES,
     HydrustCapabilities,
     RULE_COMPAT,
+    SERVER_ARGS,
     SETTING_COMPAT,
     advertisesPullDiagnostics,
     buildCompatReport,
@@ -47,15 +48,16 @@ import { REPO_ROOT } from './serverRepo';
  *
  * Either name is accepted, since this suite runs against whatever is in the
  * server checkout's target directory and the rename lands there before it
- * lands in a release. A `hydrust` needs the `server` subcommand to speak LSP;
- * a `hydra-lsp` predates it and takes no arguments.
+ * lands in a release. Whichever is picked is launched with `SERVER_ARGS`, as the
+ * extension does, so the handshake also checks that a legacy `hydra-lsp`
+ * ignores the `server` argument.
  *
  * Until the two binaries are merged `cargo build` produces both and only
  * `hydra-lsp` is the language server — a `hydrust` next to it is the CLI,
  * which exits 2 on `server`. So a `hydrust` is only picked when it reports
  * the merged version, and it then wins over any leftover `hydra-lsp`.
  */
-function requireBinary(): { path: string; args: string[] } {
+function requireBinary(): string {
     const targetDir = path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug');
     const candidates = process.env.HYDRA_LSP_BINARY
         ? [path.resolve(process.env.HYDRA_LSP_BINARY)]
@@ -77,12 +79,9 @@ function requireBinary(): { path: string; args: string[] } {
         const version = parseServerVersion(result.stdout);
         return !!version && isAtLeast(version, UNIFIED_BINARY_VERSION);
     });
-    if (merged) {
-        return { path: merged, args: ['server'] };
-    }
-    const legacy = found.find((candidate) => !isUnified(candidate));
-    if (legacy) {
-        return { path: legacy, args: [] };
+    const picked = merged ?? found.find((candidate) => !isUnified(candidate));
+    if (picked) {
+        return picked;
     }
     if (found.length > 0) {
         throw new Error(
@@ -105,7 +104,6 @@ function requireBinary(): { path: string; args: string[] } {
 }
 
 let binaryPath: string;
-let serverArgs: string[];
 let workspace: string;
 
 /** The reply from a client that advertised everything. */
@@ -114,13 +112,13 @@ let fullResult: unknown;
 let bareResult: unknown;
 
 beforeAll(async () => {
-    ({ path: binaryPath, args: serverArgs } = requireBinary());
+    binaryPath = requireBinary();
     workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-contract-'));
 
     fullResult = (
         await initializeHandshake({
             binaryPath,
-            args: serverArgs,
+            args: [...SERVER_ARGS],
             capabilities: ALL_CAPABILITIES,
             rootPath: workspace,
         })
@@ -128,7 +126,7 @@ beforeAll(async () => {
     bareResult = (
         await initializeHandshake({
             binaryPath,
-            args: serverArgs,
+            args: [...SERVER_ARGS],
             capabilities: NO_CAPABILITIES,
             rootPath: workspace,
         })
@@ -327,7 +325,7 @@ describe('feature negotiation', () => {
     it('turns on exactly the one behaviour a partly-capable client asked for', async () => {
         const { initializeResult } = await initializeHandshake({
             binaryPath,
-            args: serverArgs,
+            args: [...SERVER_ARGS],
             rootPath: workspace,
             capabilities: {
                 workspace: { didChangeWatchedFiles: { dynamicRegistration: true } },
@@ -341,7 +339,7 @@ describe('feature negotiation', () => {
     it('does not offer refresh to a client that only does pull diagnostics', async () => {
         const { initializeResult } = await initializeHandshake({
             binaryPath,
-            args: serverArgs,
+            args: [...SERVER_ARGS],
             rootPath: workspace,
             capabilities: { textDocument: { diagnostic: {} } },
         });
