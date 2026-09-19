@@ -19,6 +19,9 @@ import {
  * The old name is preferred: until the two binaries are merged, a `hydrust`
  * on PATH may be the pre-merge CLI, which exits 2 on `server`, while a
  * `hydra-lsp` is always a language server.
+ *
+ * TODO: flip this order once the binaries are merged (server v0.5.0), or an
+ * old `hydra-lsp` left on PATH will shadow a newer `hydrust`.
  */
 export const PATH_CANDIDATES: readonly string[] = [LEGACY_BINARY_NAME, DISPLAY_NAME];
 

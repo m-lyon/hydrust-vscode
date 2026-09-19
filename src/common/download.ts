@@ -8,9 +8,19 @@ import { pipeline } from 'stream/promises';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import { logger } from './logger';
-import { FALLBACK_SERVER_VERSION, SERVER_REPO, getPlatformInfo, getDownloadUrl, getChecksumUrl } from './constants';
-import { getArchiveFileName, getArchiveFileNameCandidates } from './constants';
-import { getVersionedDir, getExecutablePath, getLibsRoot, isWindows } from './constants';
+import {
+    FALLBACK_SERVER_VERSION,
+    SERVER_REPO,
+    getPlatformInfo,
+    getDownloadUrl,
+    getChecksumUrl,
+    getArchiveFileName,
+    getArchiveFileNameCandidates,
+    getVersionedDir,
+    getExecutablePath,
+    getLibsRoot,
+    isWindows,
+} from './constants';
 import { fsapi } from './vscodeapi';
 import { isDeveloperMode } from './settings';
 
@@ -465,16 +475,15 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         if (release.draft || release.prerelease || !Array.isArray(release.assets)) {
             continue;
         }
-        const matched = release.assets.find((asset: { name: string }) =>
-            expectedAssetNames.includes(asset.name)
-        );
+        const derived = getArchiveFileName(platformInfo, release.tag_name);
+        const names: string[] = release.assets.map((asset: { name: string }) => asset.name);
+        const matched = names.find((name) => expectedAssetNames.includes(name));
         if (matched) {
-            const derived = getArchiveFileName(platformInfo, release.tag_name);
-            if (derived !== matched.name) {
+            if (!names.includes(derived)) {
                 // The naming table and the release disagree, so downloading it
                 // would 404. Skip it and keep looking for an older release.
                 logger.warn(
-                    `Release ${release.tag_name} has an asset named '${matched.name}', but this ` +
+                    `Release ${release.tag_name} has an asset named '${matched}', but this ` +
                     `extension expects '${derived}' for that version. The naming table is out of ` +
                     'date; skipping this release.'
                 );

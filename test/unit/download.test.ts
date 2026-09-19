@@ -668,6 +668,22 @@ describe.skipIf(process.platform === 'win32')('naming across the server rename',
         expect(stub.logs.some((line) => line.includes('naming table is out of date'))).toBe(true);
     });
 
+    for (const order of ['legacy first', 'new first']) {
+        it(`uses a release that carries both asset names (${order})`, async () => {
+            const [newName, oldName] = getArchiveFileNameCandidates(getPlatformInfo());
+            const names = order === 'legacy first' ? [oldName, newName] : [newName, oldName];
+            net.routes.set(RELEASES_PAGE, 'network-error');
+            net.routes.set(RELEASES_API, {
+                status: 200,
+                body: JSON.stringify([{ tag_name: 'v0.5.0', assets: names.map((name) => ({ name })) }]),
+            });
+            const executable = installOnDisk('v0.5.0');
+
+            await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.5.0' });
+            expect(stub.logs.some((line) => line.includes('naming table is out of date'))).toBe(false);
+        });
+    }
+
     it('finds the newest installed binary across both sides of the rename', async () => {
         installOnDisk('v0.4.0');
         const newer = installOnDisk('v0.5.0');
