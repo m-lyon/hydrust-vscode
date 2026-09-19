@@ -1,6 +1,6 @@
 # Change Log
 
-## [Unreleased]
+## [0.1.6]
 
 - Fixed the extension failing to start when the GitHub API rate limit is exhausted
 - Downloaded server binaries are now kept in global storage, so they survive extension updates
