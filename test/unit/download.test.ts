@@ -731,7 +731,9 @@ describe('the release pin script', () => {
         const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
         const arch = Object.getOwnPropertyDescriptor(process, 'arch')!;
         try {
-            for (const tag of ['v0.4.2', 'v0.5.0']) {
+            // Tags either side of the cutover catch the script's copy of
+            // UNIFIED_BINARY_VERSION drifting from the extension's.
+            for (const tag of ['v0.4.2', 'v0.4.9', 'v0.5.0-rc1', 'v0.5.0']) {
                 const names = combos.map(([p, a]) => {
                     Object.defineProperty(process, 'platform', { value: p });
                     Object.defineProperty(process, 'arch', { value: a });

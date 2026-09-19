@@ -3,10 +3,10 @@ import * as vscode from 'vscode';
 import which from 'which';
 import { logger } from './logger';
 import { PATH_CANDIDATES } from './constants';
-import { SERVER_ARGS } from './compatTable';
+import { DISPLAY_NAME, SERVER_ARGS, UNIFIED_BINARY_VERSION, formatServerVersion, isAtLeast } from './compatTable';
 import { ExtensionSettings } from './settings';
 import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
-import { ResolvedBinary, ServerCompat } from './compat';
+import { ResolvedBinary, ServerCompat, probeBinaryVersion } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
 import {
@@ -50,6 +50,19 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
         try {
             for (const candidate of PATH_CANDIDATES) {
                 const environmentPath = await which(candidate, { nothrow: true });
+                if (environmentPath && candidate === DISPLAY_NAME) {
+                    // A pre-merge `hydrust` is the CLI, which answers
+                    // --version but exits 2 on `server`. Only a merged
+                    // release is a language server.
+                    const version = await probeBinaryVersion(environmentPath, context);
+                    if (!version || !isAtLeast(version, UNIFIED_BINARY_VERSION)) {
+                        logger.info(
+                            `Ignoring ${environmentPath}: not ${DISPLAY_NAME} ` +
+                            `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
+                        );
+                        continue;
+                    }
+                }
                 if (environmentPath) {
                     logger.info(`Using environment executable: ${environmentPath}`);
                     return { path: environmentPath, source: 'environment' };

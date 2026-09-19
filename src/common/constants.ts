@@ -18,7 +18,8 @@ import {
  *
  * The old name is preferred: until the two binaries are merged, a `hydrust`
  * on PATH may be the pre-merge CLI, which exits 2 on `server`, while a
- * `hydra-lsp` is always a language server.
+ * `hydra-lsp` is always a language server. A `hydrust` is only accepted if
+ * it reports v0.5.0 or later (see findBinaryPath).
  *
  * TODO: flip this order once the binaries are merged (server v0.5.0), or an
  * old `hydra-lsp` left on PATH will shadow a newer `hydrust`.

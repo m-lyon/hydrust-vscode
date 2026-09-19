@@ -134,7 +134,7 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
  * Work out the version of a binary, remembering the answer so restarts do not
  * keep spawning processes.
  */
-async function probeBinaryVersion(
+export async function probeBinaryVersion(
     binaryPath: string,
     context: vscode.ExtensionContext,
     timeoutMs?: number
