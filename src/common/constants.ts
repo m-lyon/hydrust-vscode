@@ -2,6 +2,8 @@ import * as path from 'path';
 import * as os from 'os';
 import {
     BINARY_NAME_CANDIDATES,
+    DISPLAY_NAME,
+    LEGACY_BINARY_NAME,
     archiveName,
     parseServerVersion,
     serverExecutableName,
@@ -12,9 +14,13 @@ import {
  *
  * Two entries where the server's own `find_hydrust_bin()` needs only
  * `hydrust`, because the extension has to keep working with a `hydra-lsp` a
- * user installed before the rename. The new name is preferred.
+ * user installed before the rename.
+ *
+ * The old name is preferred: until the two binaries are merged, a `hydrust`
+ * on PATH may be the pre-merge CLI, which exits 2 on `server`, while a
+ * `hydra-lsp` is always a language server.
  */
-export const PATH_CANDIDATES: readonly string[] = BINARY_NAME_CANDIDATES;
+export const PATH_CANDIDATES: readonly string[] = [LEGACY_BINARY_NAME, DISPLAY_NAME];
 
 /** The GitHub repository the server is released from, as `owner/name`. */
 export const SERVER_REPO = 'm-lyon/hydra-lsp';

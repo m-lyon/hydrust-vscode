@@ -469,20 +469,20 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
             expectedAssetNames.includes(asset.name)
         );
         if (matched) {
-            const etag = headerValue(response.headers, 'etag');
-            if (etag) {
-                await context.globalState.update(API_ETAG_CACHE_KEY, { etag, tag: release.tag_name });
-            }
             const derived = getArchiveFileName(platformInfo, release.tag_name);
             if (derived !== matched.name) {
-                // The naming table and the release disagree, so the download
-                // that follows is about to 404. Say which tag and which two
-                // names, or it looks like a network fault.
+                // The naming table and the release disagree, so downloading it
+                // would 404. Skip it and keep looking for an older release.
                 logger.warn(
                     `Release ${release.tag_name} has an asset named '${matched.name}', but this ` +
                     `extension expects '${derived}' for that version. The naming table is out of ` +
-                    'date and the download will fail.'
+                    'date; skipping this release.'
                 );
+                continue;
+            }
+            const etag = headerValue(response.headers, 'etag');
+            if (etag) {
+                await context.globalState.update(API_ETAG_CACHE_KEY, { etag, tag: release.tag_name });
             }
             logger.info(`Newest release with a ${platformInfo.platform} archive is ${release.tag_name}.`);
             return release.tag_name;

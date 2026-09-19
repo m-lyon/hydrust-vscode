@@ -103,6 +103,7 @@ import {
 } from '../../src/common/download';
 import {
     FALLBACK_SERVER_VERSION,
+    getArchiveFileName,
     getArchiveFileNameCandidates,
     getDownloadUrl,
     getExecutablePath,
@@ -648,19 +649,22 @@ describe.skipIf(process.platform === 'win32')('naming across the server rename',
         await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.4.0' });
     });
 
-    it('warns when a matched release names the archive differently than the table expects', async () => {
+    it('skips a release that names the archive differently than the table expects', async () => {
         // The table says v0.5.0 should carry the new name; this release still
-        // carries the old one, which is exactly the naming-table-out-of-date
-        // scenario the warning exists for.
+        // carries the old one, so downloading it would 404. The older release
+        // that matches the table is used instead.
         net.routes.set(RELEASES_PAGE, 'network-error');
         net.routes.set(RELEASES_API, {
             status: 200,
-            body: JSON.stringify([{ tag_name: 'v0.5.0', assets: [{ name: assetName() }] }]),
+            body: JSON.stringify([
+                { tag_name: 'v0.5.0', assets: [{ name: assetName() }] },
+                { tag_name: 'v0.4.0', assets: [{ name: assetName() }] },
+            ]),
         });
         installOnDisk('v0.5.0');
+        const executable = installOnDisk('v0.4.0');
 
-        await ensure();
-
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.4.0' });
         expect(stub.logs.some((line) => line.includes('naming table is out of date'))).toBe(true);
     });
 
@@ -711,12 +715,14 @@ describe('the release pin script', () => {
         const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
         const arch = Object.getOwnPropertyDescriptor(process, 'arch')!;
         try {
-            const names = combos.map(([p, a]) => {
-                Object.defineProperty(process, 'platform', { value: p });
-                Object.defineProperty(process, 'arch', { value: a });
-                return assetName();
-            });
-            expect([...names].sort()).toEqual([...platformAssetsFor('v0.4.2')].sort());
+            for (const tag of ['v0.4.2', 'v0.5.0']) {
+                const names = combos.map(([p, a]) => {
+                    Object.defineProperty(process, 'platform', { value: p });
+                    Object.defineProperty(process, 'arch', { value: a });
+                    return getArchiveFileName(getPlatformInfo(), tag);
+                });
+                expect([...names].sort()).toEqual([...platformAssetsFor(tag)].sort());
+            }
         } finally {
             Object.defineProperty(process, 'platform', platform);
             Object.defineProperty(process, 'arch', arch);
