@@ -10,21 +10,19 @@ import {
 } from './compatTable';
 
 /**
- * Names to try, in order, when looking for a server on PATH.
+ * Names to look for when finding a server on PATH.
  *
  * Two entries where the server's own `find_hydrust_bin()` needs only
  * `hydrust`, because the extension has to keep working with a `hydra-lsp` a
  * user installed before the rename.
  *
- * The old name is preferred: until the two binaries are merged, a `hydrust`
- * on PATH may be the pre-merge CLI, which exits 2 on `server`, while a
- * `hydra-lsp` is always a language server. A `hydrust` is only accepted if
- * it reports v0.5.0 or later (see findBinaryPath).
- *
- * TODO: flip this order once the binaries are merged (server v0.5.0), or an
- * old `hydra-lsp` left on PATH will shadow a newer `hydrust`.
+ * When both are found, the higher version wins (see findBinaryPath), so an
+ * old `hydra-lsp` left on PATH cannot shadow a newer `hydrust`. A `hydrust`
+ * is only accepted if it reports v0.5.0 or later: before the two binaries
+ * were merged it was the CLI, which exits 2 on `server`. On a tie, the
+ * earlier name here wins.
  */
-export const PATH_CANDIDATES: readonly string[] = [LEGACY_BINARY_NAME, DISPLAY_NAME];
+export const PATH_CANDIDATES: readonly string[] = [DISPLAY_NAME, LEGACY_BINARY_NAME];
 
 /** The GitHub repository the server is released from, as `owner/name`. */
 export const SERVER_REPO = 'm-lyon/hydra-lsp';

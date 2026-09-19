@@ -1,9 +1,18 @@
 
+import * as path from 'path';
 import * as vscode from 'vscode';
 import which from 'which';
 import { logger } from './logger';
 import { PATH_CANDIDATES } from './constants';
-import { DISPLAY_NAME, SERVER_ARGS, UNIFIED_BINARY_VERSION, formatServerVersion, isAtLeast } from './compatTable';
+import {
+    DISPLAY_NAME,
+    SERVER_ARGS,
+    ServerVersion,
+    UNIFIED_BINARY_VERSION,
+    compareServerVersions,
+    formatServerVersion,
+    isAtLeast,
+} from './compatTable';
 import { ExtensionSettings } from './settings';
 import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
 import { ResolvedBinary, ServerCompat, probeBinaryVersion } from './compat';
@@ -30,6 +39,20 @@ export interface StartedServer {
 }
 
 /**
+ * Whether a binary called `hydrust` can be launched as a language server.
+ *
+ * A pre-merge `hydrust` is the CLI, which answers --version but exits 2 on
+ * `server`. Only a merged release is a language server. Anything not called
+ * `hydrust` is assumed to be one.
+ */
+function isUsableServer(binaryPath: string, version: ServerVersion | undefined): boolean {
+    if (path.basename(binaryPath, '.exe') !== DISPLAY_NAME) {
+        return true;
+    }
+    return !!version && isAtLeast(version, UNIFIED_BINARY_VERSION);
+}
+
+/**
  * Find the hydrust server binary, and note which of the three resolution paths
  * found it. The bundled path also knows the release tag, which saves having to
  * ask the binary its version later.
@@ -39,34 +62,58 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
     // 1. User-specified path takes priority
     if (settings.path.length > 0) {
         if (await fsapi.pathExists(settings.path)) {
-            logger.info(`Using 'path' setting: ${settings.path}`);
-            return { path: settings.path, source: 'serverPath' };
+            const version = path.basename(settings.path, '.exe') === DISPLAY_NAME
+                ? await probeBinaryVersion(settings.path, context)
+                : undefined;
+            if (isUsableServer(settings.path, version)) {
+                logger.info(`Using 'path' setting: ${settings.path}`);
+                return { path: settings.path, source: 'serverPath' };
+            }
+            logger.warn(
+                `Ignoring 'path' setting ${settings.path}: not ${DISPLAY_NAME} ` +
+                `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
+            );
+            void vscode.window.showWarningMessage(
+                `${settings.path} is not ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} ` +
+                'or later, so it cannot run the language server. Falling back to another server.'
+            );
+        } else {
+            logger.warn('No valid path found in settings.path');
         }
-        logger.warn('No valid path found in settings.path');
     }
 
     // 2. Use environment if explicitly requested
     if (settings.importStrategy === 'fromEnvironment') {
         try {
+            // Pick the highest version among the names on PATH, so an old
+            // `hydra-lsp` cannot shadow a newer `hydrust`. A version that
+            // cannot be determined loses to any known one.
+            let best: { path: string; version?: ServerVersion } | undefined;
             for (const candidate of PATH_CANDIDATES) {
                 const environmentPath = await which(candidate, { nothrow: true });
-                if (environmentPath && candidate === DISPLAY_NAME) {
-                    // A pre-merge `hydrust` is the CLI, which answers
-                    // --version but exits 2 on `server`. Only a merged
-                    // release is a language server.
-                    const version = await probeBinaryVersion(environmentPath, context);
-                    if (!version || !isAtLeast(version, UNIFIED_BINARY_VERSION)) {
-                        logger.info(
-                            `Ignoring ${environmentPath}: not ${DISPLAY_NAME} ` +
-                            `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
-                        );
-                        continue;
-                    }
+                if (!environmentPath) {
+                    continue;
                 }
-                if (environmentPath) {
-                    logger.info(`Using environment executable: ${environmentPath}`);
-                    return { path: environmentPath, source: 'environment' };
+                const version = await probeBinaryVersion(environmentPath, context);
+                if (!isUsableServer(environmentPath, version)) {
+                    logger.info(
+                        `Ignoring ${environmentPath}: not ${DISPLAY_NAME} ` +
+                        `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
+                    );
+                    continue;
                 }
+                if (!best) {
+                    best = { path: environmentPath, version };
+                } else if (version && (!best.version || compareServerVersions(version, best.version) > 0)) {
+                    logger.info(`Ignoring ${best.path}: ${environmentPath} is newer.`);
+                    best = { path: environmentPath, version };
+                } else {
+                    logger.info(`Ignoring ${environmentPath}: ${best.path} is at least as new.`);
+                }
+            }
+            if (best) {
+                logger.info(`Using environment executable: ${best.path}`);
+                return { path: best.path, source: 'environment' };
             }
         } catch (err) {
             logger.debug(`Error checking PATH: ${err}`);
