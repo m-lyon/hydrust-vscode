@@ -29,7 +29,7 @@ import {
 /** How often a running bundled server re-records its version as used, so other windows do not prune it. */
 const MARK_USED_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-/** PATH binaries whose remembered unknown version has been re-checked this session. */
+/** hydrust binaries whose remembered unknown version has been re-checked this session. */
 const recheckedUnknown = new Set<string>();
 
 /** `serverPath` settings already warned about this session, so restarts do not repeat the toast. */
@@ -72,22 +72,39 @@ function isUsableServer(binaryPath: string, version: ServerVersion | undefined, 
 }
 
 /**
- * Find the hydrust server binary, and note which of the three resolution paths
- * found it. The bundled path also knows the release tag, which saves having to
- * ask the binary its version later.
+ * Whether a remembered unknown version for this binary should be asked again:
+ * true the first time per session, since the failure may just have been a
+ * slow first run.
  */
-async function findBinaryPath(settings: ExtensionSettings, context: vscode.ExtensionContext): Promise<ResolvedBinary> {
+function recheckUnknownOnce(binaryPath: string): boolean {
+    if (recheckedUnknown.has(binaryPath)) {
+        return false;
+    }
+    recheckedUnknown.add(binaryPath);
+    return true;
+}
+
+/**
+ * Find the hydrust server binary, and note which of the three resolution paths
+ * found it, along with its version when already known (the bundled release
+ * tag, or a probe made while choosing), which saves asking the binary again.
+ */
+async function findBinaryPath(
+    settings: ExtensionSettings,
+    context: vscode.ExtensionContext,
+    probeTimeoutMs?: number
+): Promise<ResolvedBinary> {
 
     // 1. User-specified path takes priority
     if (settings.path.length > 0) {
         if (await fsapi.pathExists(settings.path)) {
             const version = isHydrustBinary(settings.path)
-                ? await probeBinaryVersion(settings.path, context)
+                ? await probeBinaryVersion(settings.path, context, probeTimeoutMs, recheckUnknownOnce(settings.path))
                 : undefined;
             // Respect the user's choice unless the binary is known to be too old.
             if (isUsableServer(settings.path, version, true)) {
                 logger.info(`Using 'path' setting: ${settings.path}`);
-                return { path: settings.path, source: 'serverPath' };
+                return { path: settings.path, source: 'serverPath', version: version && formatServerVersion(version) };
             }
             logger.warn(
                 `Ignoring 'path' setting ${settings.path}: not ${DISPLAY_NAME} ` +
@@ -120,11 +137,8 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
                 // A remembered failure may just have been a slow first run,
                 // so a hydrust gets asked again once per session before it
                 // is ruled out.
-                const recheck = isHydrustBinary(environmentPath) && !recheckedUnknown.has(environmentPath);
-                if (recheck) {
-                    recheckedUnknown.add(environmentPath);
-                }
-                const version = await probeBinaryVersion(environmentPath, context, undefined, recheck);
+                const recheck = isHydrustBinary(environmentPath) && recheckUnknownOnce(environmentPath);
+                const version = await probeBinaryVersion(environmentPath, context, probeTimeoutMs, recheck);
                 if (!isUsableServer(environmentPath, version)) {
                     if (version) {
                         logger.info(
@@ -150,7 +164,11 @@ async function findBinaryPath(settings: ExtensionSettings, context: vscode.Exten
             }
             if (best) {
                 logger.info(`Using environment executable: ${best.path}`);
-                return { path: best.path, source: 'environment' };
+                return {
+                    path: best.path,
+                    source: 'environment',
+                    version: best.version && formatServerVersion(best.version),
+                };
             }
         } catch (err) {
             logger.debug(`Error checking PATH: ${err}`);
@@ -193,12 +211,13 @@ export async function startServer(
     outputChannel: vscode.OutputChannel,
     traceOutputChannel: vscode.OutputChannel,
     context: vscode.ExtensionContext,
-    projectRoot?: string
+    projectRoot?: string,
+    probeTimeoutMs?: number
 ): Promise<StartedServer> {
     logger.info('Starting Hydrust Server...');
 
     // Find the binary
-    const binary = await findBinaryPath(settings, context);
+    const binary = await findBinaryPath(settings, context, probeTimeoutMs);
     logger.info(`Server path: ${binary.path}`);
 
     // Check if binary exists
@@ -215,7 +234,8 @@ export async function startServer(
         serverId,
         settings.disabledRules,
         projectRoot,
-        context
+        context,
+        probeTimeoutMs
     );
 
     // Set up server options. SERVER_ARGS is unconditional, including for

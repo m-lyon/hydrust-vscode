@@ -294,8 +294,9 @@ export class ServerCompat {
     /**
      * Find out everything possible about the binary before it is launched.
      *
-     * The bundled path already knows its release tag, so no process is spawned.
-     * The other two paths have to ask the binary itself.
+     * When the resolution path already knows the version (the bundled release
+     * tag, or a probe made while choosing the binary), no process is spawned.
+     * Otherwise the binary has to be asked itself.
      *
      * `probeTimeoutMs` only exists so the tests can make the `--version` probe
      * give up quickly. The extension never passes it.
