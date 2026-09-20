@@ -1,5 +1,5 @@
 /**
- * Boot the real hydra-lsp binary and check the extension reads it correctly.
+ * Boot the real server binary and check the extension reads it correctly.
  *
  * The compatibility layer's whole job is to understand what the server says
  * about itself. The unit tests exercise it against handwritten payloads, which
@@ -15,6 +15,7 @@
  * server binary.
  */
 
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -28,33 +29,70 @@ import {
     FEATURE_WATCHED_FILES,
     HydrustCapabilities,
     RULE_COMPAT,
+    SERVER_ARGS,
     SETTING_COMPAT,
     advertisesPullDiagnostics,
     buildCompatReport,
+    UNIFIED_BINARY_VERSION,
     formatServerVersion,
+    isAtLeast,
     parseHydrustCapabilities,
+    parseServerVersion,
     readServerInfoVersion,
 } from '../../src/common/compatTable';
 import { ALL_CAPABILITIES, NO_CAPABILITIES, initializeHandshake } from './lspClient';
 import { REPO_ROOT } from './serverRepo';
 
-/** Where to find the server binary, and a clear complaint when it is missing. */
+/**
+ * Where to find the server binary, and a clear complaint when it is missing.
+ *
+ * Either name is accepted, since this suite runs against whatever is in the
+ * server checkout's target directory and the rename lands there before it
+ * lands in a release. Whichever is picked is launched with `SERVER_ARGS`, as the
+ * extension does, so the handshake also checks that a legacy `hydra-lsp`
+ * ignores the `server` argument.
+ *
+ * Until the two binaries are merged `cargo build` produces both and only
+ * `hydra-lsp` is the language server — a `hydrust` next to it is the CLI,
+ * which exits 2 on `server`. So a `hydrust` is only picked when it reports
+ * the merged version, and it then wins over any leftover `hydra-lsp`.
+ */
 function requireBinary(): string {
+    const targetDir = path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug');
     const candidates = process.env.HYDRA_LSP_BINARY
         ? [path.resolve(process.env.HYDRA_LSP_BINARY)]
         : [
-            path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug', 'hydra-lsp'),
-            path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug', 'hydra-lsp.exe'),
+            path.join(targetDir, 'hydra-lsp'),
+            path.join(targetDir, 'hydra-lsp.exe'),
+            path.join(targetDir, 'hydrust'),
+            path.join(targetDir, 'hydrust.exe'),
         ];
 
-    for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) {
-            return candidate;
+    const found = candidates.filter((candidate) => fs.existsSync(candidate));
+    const isUnified = (candidate: string) =>
+        path.basename(candidate).toLowerCase().replace(/\.exe$/, '') === 'hydrust';
+    const merged = found.find((candidate) => {
+        if (!isUnified(candidate)) {
+            return false;
         }
+        const result = spawnSync(candidate, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+        const version = parseServerVersion(result.stdout);
+        return !!version && isAtLeast(version, UNIFIED_BINARY_VERSION);
+    });
+    const picked = merged ?? found.find((candidate) => !isUnified(candidate));
+    if (picked) {
+        return picked;
+    }
+    if (found.length > 0) {
+        throw new Error(
+            `Found ${found.join(', ')}, but it does not report ${formatServerVersion(UNIFIED_BINARY_VERSION)} ` +
+            'or later, so it is not a language server (the pre-merge hydrust CLI?).\n' +
+            'Build hydra-lsp, or point $HYDRA_LSP_BINARY at a server binary.'
+        );
     }
 
     throw new Error(
-        'No hydra-lsp binary was found, so there is nothing to check the extension against.\n' +
+        'No server binary was found, so there is nothing to check the extension against.\n' +
         `Looked in:\n${candidates.map((entry) => `  ${entry}`).join('\n')}\n\n` +
         'Build the server first:\n' +
         '  cd ../hydra-lsp && cargo build\n' +
@@ -77,10 +115,22 @@ beforeAll(async () => {
     binaryPath = requireBinary();
     workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-contract-'));
 
-    fullResult = (await initializeHandshake({ binaryPath, capabilities: ALL_CAPABILITIES, rootPath: workspace }))
-        .initializeResult;
-    bareResult = (await initializeHandshake({ binaryPath, capabilities: NO_CAPABILITIES, rootPath: workspace }))
-        .initializeResult;
+    fullResult = (
+        await initializeHandshake({
+            binaryPath,
+            args: [...SERVER_ARGS],
+            capabilities: ALL_CAPABILITIES,
+            rootPath: workspace,
+        })
+    ).initializeResult;
+    bareResult = (
+        await initializeHandshake({
+            binaryPath,
+            args: [...SERVER_ARGS],
+            capabilities: NO_CAPABILITIES,
+            rootPath: workspace,
+        })
+    ).initializeResult;
 });
 
 afterAll(() => {
@@ -275,6 +325,7 @@ describe('feature negotiation', () => {
     it('turns on exactly the one behaviour a partly-capable client asked for', async () => {
         const { initializeResult } = await initializeHandshake({
             binaryPath,
+            args: [...SERVER_ARGS],
             rootPath: workspace,
             capabilities: {
                 workspace: { didChangeWatchedFiles: { dynamicRegistration: true } },
@@ -288,6 +339,7 @@ describe('feature negotiation', () => {
     it('does not offer refresh to a client that only does pull diagnostics', async () => {
         const { initializeResult } = await initializeHandshake({
             binaryPath,
+            args: [...SERVER_ARGS],
             rootPath: workspace,
             capabilities: { textDocument: { diagnostic: {} } },
         });

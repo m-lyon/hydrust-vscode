@@ -2,7 +2,7 @@
   "name": "hydrust",
   "displayName": "Hydrust",
   "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "m-lyon",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,7 @@
       "properties": {
         "hydrust.serverPath": {
           "default": "",
-          "description": "Path to the hydra-lsp executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
+          "description": "Path to the hydrust executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
           "scope": "resource",
           "type": "string"
         },
@@ -45,14 +45,14 @@
         },
         "hydrust.importStrategy": {
           "default": "fromEnvironment",
-          "description": "Strategy for resolving the hydra-lsp executable.",
+          "description": "Strategy for resolving the hydrust executable.",
           "enum": [
             "fromEnvironment",
             "useBundled"
           ],
           "enumDescriptions": [
-            "Use the hydra-lsp server from the environment (available on PATH), whilst falling back to bundled executable if not found.",
-            "Always use the bundled hydra-lsp executable."
+            "Use the hydrust server from the environment (available on PATH, under either 'hydrust' or the older 'hydra-lsp' name), whilst falling back to bundled executable if not found.",
+            "Always use the bundled hydrust executable."
           ],
           "scope": "window",
           "type": "string"
@@ -76,7 +76,7 @@
         },
         "hydrust.disabledRules": {
           "default": [],
-          "markdownDescription": "List of diagnostic rules to disable. Available rules: missing-argument, unknown-argument, unresolved-reference, unresolved-import, invalid-hydra-parameter, parameter-already-assigned, too-many-positional-arguments.\n\n_(requires hydra-lsp v0.2.0 or later; the `invalid-hydra-parameter`, `parameter-already-assigned` and `too-many-positional-arguments` rules require v0.3.0 or later)_",
+          "markdownDescription": "List of diagnostic rules to disable. Available rules: missing-argument, unknown-argument, unresolved-reference, unresolved-import, invalid-hydra-parameter, parameter-already-assigned, too-many-positional-arguments.\n\n_(requires hydrust v0.2.0 or later; the `invalid-hydra-parameter`, `parameter-already-assigned` and `too-many-positional-arguments` rules require v0.3.0 or later)_",
           "scope": "resource",
           "items": {
             "type": "string",
@@ -94,7 +94,7 @@
         },
         "hydrust.numThreads": {
           "default": 0,
-          "markdownDescription": "Total number of threads the server runs, including the one that handles the protocol itself. The rest are split between a latency pool (hover, completion, semantic tokens) and a worker pool (diagnostics).\n\nSet to 0 for a default the server picks to fit the machine. 1 and 2 are not offered: each pool needs a thread of its own once the protocol thread is accounted for.\n\n_(requires hydra-lsp v0.4.0 or later)_",
+          "markdownDescription": "Total number of threads the server runs, including the one that handles the protocol itself. The rest are split between a latency pool (hover, completion, semantic tokens) and a worker pool (diagnostics).\n\nSet to 0 for a default the server picks to fit the machine. 1 and 2 are not offered: each pool needs a thread of its own once the protocol thread is accounted for.\n\n_(requires hydrust v0.4.0 or later)_",
           "enum": [
             0,
             3,
@@ -124,37 +124,37 @@
         },
         "hydrust.enableHover": {
           "default": true,
-          "markdownDescription": "Enable hover information for hydra targets.\n\n_(requires hydra-lsp v0.2.0 or later)_",
+          "markdownDescription": "Enable hover information for hydra targets.\n\n_(requires hydrust v0.2.0 or later)_",
           "scope": "resource",
           "type": "boolean"
         },
         "hydrust.enableCompletion": {
           "default": true,
-          "markdownDescription": "Enable auto-completion for hydra targets.\n\n_(requires hydra-lsp v0.2.0 or later)_",
+          "markdownDescription": "Enable auto-completion for hydra targets.\n\n_(requires hydrust v0.2.0 or later)_",
           "scope": "resource",
           "type": "boolean"
         },
         "hydrust.enableSignatureHelp": {
           "default": true,
-          "markdownDescription": "Enable signature help for hydra targets.\n\n_(requires hydra-lsp v0.2.0 or later)_",
+          "markdownDescription": "Enable signature help for hydra targets.\n\n_(requires hydrust v0.2.0 or later)_",
           "scope": "resource",
           "type": "boolean"
         },
         "hydrust.enableGotoDefinition": {
           "default": true,
-          "markdownDescription": "Enable go-to-definition for hydra targets.\n\n_(requires hydra-lsp v0.2.0 or later)_",
+          "markdownDescription": "Enable go-to-definition for hydra targets.\n\n_(requires hydrust v0.2.0 or later)_",
           "scope": "resource",
           "type": "boolean"
         },
         "hydrust.enableSemanticTokens": {
           "default": true,
-          "markdownDescription": "Enable semantic token highlighting.\n\n_(requires hydra-lsp v0.2.0 or later)_",
+          "markdownDescription": "Enable semantic token highlighting.\n\n_(requires hydrust v0.2.0 or later)_",
           "scope": "resource",
           "type": "boolean"
         },
         "hydrust.enableDiagnostics": {
           "default": true,
-          "markdownDescription": "Enable diagnostics (error/warning reporting).\n\n_(requires hydra-lsp v0.2.0 or later)_",
+          "markdownDescription": "Enable diagnostics (error/warning reporting).\n\n_(requires hydrust v0.2.0 or later)_",
           "scope": "resource",
           "type": "boolean"
         },
@@ -219,7 +219,7 @@
     "ts-loader": "^9.5.2",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.46.0",
-    "vitest": "^3.2.7",
+    "vitest": "^4.1.11",
     "webpack": "^5.99.9",
     "webpack-cli": "^6.0.1"
   },

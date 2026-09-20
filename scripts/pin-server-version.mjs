@@ -1,5 +1,5 @@
 // Rewrites FALLBACK_SERVER_VERSION in src/common/constants.ts to the newest
-// stable hydra-lsp release that has an archive for every supported platform.
+// stable server release that has an archive for every supported platform.
 // Run by the release workflow before packaging; set GITHUB_TOKEN to avoid the
 // unauthenticated API rate limit.
 
@@ -7,17 +7,47 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
-/** Every archive getPlatformInfo() in src/common/constants.ts can ask for. */
-export const PLATFORM_ASSETS = [
-    'hydra-lsp-x86_64-pc-windows-msvc.zip',
-    'hydra-lsp-aarch64-apple-darwin.tar.xz',
-    'hydra-lsp-x86_64-apple-darwin.tar.xz',
-    'hydra-lsp-aarch64-unknown-linux-gnu.tar.xz',
-    'hydra-lsp-x86_64-unknown-linux-gnu.tar.xz',
-];
-
 /** Must match TAG_PATTERN in src/common/download.ts. */
 export const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
+
+/** Must match UNIFIED_BINARY_VERSION in src/common/compatTable.ts. */
+const UNIFIED_BINARY_VERSION = { major: 0, minor: 5, patch: 0 };
+
+/** Every platform/extension combination getPlatformInfo() in src/common/constants.ts can ask for. */
+const PLATFORM_TARGETS = [
+    'x86_64-pc-windows-msvc.zip',
+    'aarch64-apple-darwin.tar.xz',
+    'x86_64-apple-darwin.tar.xz',
+    'aarch64-unknown-linux-gnu.tar.xz',
+    'x86_64-unknown-linux-gnu.tar.xz',
+];
+
+function parseVersion(tag) {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(tag);
+    return match ? { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) } : undefined;
+}
+
+function isAtLeast(version, minimum) {
+    if (version.major !== minimum.major) return version.major > minimum.major;
+    if (version.minor !== minimum.minor) return version.minor > minimum.minor;
+    return version.patch >= minimum.patch;
+}
+
+/**
+ * The archive basename a release of this tag uses: 'hydrust' from v0.5.0
+ * onwards, 'hydra-lsp' before it. Must match archiveName in
+ * src/common/compatTable.ts.
+ */
+function binaryBaseName(tag) {
+    const version = parseVersion(tag);
+    return version && isAtLeast(version, UNIFIED_BINARY_VERSION) ? 'hydrust' : 'hydra-lsp';
+}
+
+/** Every archive asset name a release of this tag must publish, one per supported platform. */
+export function platformAssetsFor(tag) {
+    const baseName = binaryBaseName(tag);
+    return PLATFORM_TARGETS.map((target) => `${baseName}-${target}`);
+}
 
 const PIN_PATTERN = /(export const FALLBACK_SERVER_VERSION = ')[^']*(';)/;
 
@@ -43,7 +73,7 @@ export function compareTagsDesc(a, b) {
     return b.replace(/^v/, '').localeCompare(a.replace(/^v/, ''));
 }
 
-/** The highest stable release, by version, with every platform archive. */
+/** The highest stable release, by version, with every platform archive for its own naming era. */
 export function pickPinnableRelease(releases) {
     const eligible = releases.filter((release) => typeof release.tag_name === 'string' && TAG_PATTERN.test(release.tag_name));
     eligible.sort((a, b) => compareTagsDesc(a.tag_name, b.tag_name));
@@ -52,7 +82,7 @@ export function pickPinnableRelease(releases) {
             continue;
         }
         const names = new Set(release.assets.map((asset) => asset.name));
-        if (PLATFORM_ASSETS.every((name) => names.has(name))) {
+        if (platformAssetsFor(release.tag_name).every((name) => names.has(name))) {
             return release.tag_name;
         }
     }
@@ -79,7 +109,7 @@ async function main() {
     }
     const tag = pickPinnableRelease(await response.json());
     if (!tag) {
-        throw new Error('No stable hydra-lsp release has an archive for every platform');
+        throw new Error('No stable release has an archive for every platform');
     }
 
     const source = await readFile(constantsPath, 'utf8');

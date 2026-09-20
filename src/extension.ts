@@ -94,16 +94,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const projectRoot = await getProjectRoot();
             const settings = getExtensionSettings(serverId, projectRoot);
 
-            // Try to get Python interpreter from Python extension first
-            const pythonPath = await getPythonInterpreter();
-
             if (settings.interpreter) {
                 logger.info(`Using configured Python interpreter: ${settings.interpreter}`);
-            } else if (pythonPath) {
-                logger.info(`Using Python interpreter from Python extension: ${pythonPath}`);
-                settings.interpreter = pythonPath;
             } else {
-                logger.info('No Python interpreter found, Hydrust will attempt to auto-detect one.');
+                // Try to get Python interpreter from Python extension first
+                const pythonPath = await getPythonInterpreter();
+                if (pythonPath) {
+                    logger.info(`Using Python interpreter from Python extension: ${pythonPath}`);
+                    settings.interpreter = pythonPath;
+                } else {
+                    logger.info('No Python interpreter found, Hydrust will attempt to auto-detect one.');
+                }
             }
 
             const started = await startServer(

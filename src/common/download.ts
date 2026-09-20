@@ -8,8 +8,19 @@ import { pipeline } from 'stream/promises';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import { logger } from './logger';
-import { BINARY_NAME, FALLBACK_SERVER_VERSION, SERVER_REPO, getPlatformInfo, getDownloadUrl, getChecksumUrl } from './constants';
-import { getVersionedDir, getExecutablePath, getLibsRoot, isWindows } from './constants';
+import {
+    FALLBACK_SERVER_VERSION,
+    SERVER_REPO,
+    getPlatformInfo,
+    getDownloadUrl,
+    getChecksumUrl,
+    getArchiveFileName,
+    getArchiveFileNameCandidates,
+    getVersionedDir,
+    getExecutablePath,
+    getLibsRoot,
+    isWindows,
+} from './constants';
 import { fsapi } from './vscodeapi';
 import { isDeveloperMode } from './settings';
 
@@ -72,7 +83,7 @@ export function versionLastUsedKey(dir: string): string {
 /** Release tags that are safe to use in file paths and shell commands. */
 export const TAG_PATTERN = /^v?\d+\.\d+\.\d+[\w.-]*$/;
 
-const USER_AGENT = 'hydra-lsp-vscode';
+const USER_AGENT = 'hydrust-vscode';
 const MAX_REDIRECTS = 5;
 
 interface CachedLatestTag {
@@ -384,7 +395,9 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
     }
 
     const platformInfo = getPlatformInfo();
-    const expectedAssetName = `${BINARY_NAME}-${platformInfo.platform}.${platformInfo.archiveExt}`;
+    // Either name is accepted, because the scan is what decides the version and
+    // so there is nothing to key the name off yet.
+    const expectedAssetNames = getArchiveFileNameCandidates(platformInfo);
     const url = `https://api.github.com/repos/${SERVER_REPO}/releases?per_page=100`;
     const cachedEtag = context.globalState.get<CachedReleasesEtag>(API_ETAG_CACHE_KEY);
 
@@ -462,10 +475,20 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         if (release.draft || release.prerelease || !Array.isArray(release.assets)) {
             continue;
         }
-        const hasMatchingAsset = release.assets.some(
-            (asset: { name: string }) => asset.name === expectedAssetName
-        );
-        if (hasMatchingAsset) {
+        const derived = getArchiveFileName(platformInfo, release.tag_name);
+        const names: string[] = release.assets.map((asset: { name: string }) => asset.name);
+        const matched = names.find((name) => expectedAssetNames.includes(name));
+        if (matched) {
+            if (!names.includes(derived)) {
+                // The naming table and the release disagree, so downloading it
+                // would 404. Skip it and keep looking for an older release.
+                logger.warn(
+                    `Release ${release.tag_name} has an asset named '${matched}', but this ` +
+                    `extension expects '${derived}' for that version. The naming table is out of ` +
+                    'date; skipping this release.'
+                );
+                continue;
+            }
             const etag = headerValue(response.headers, 'etag');
             if (etag) {
                 await context.globalState.update(API_ETAG_CACHE_KEY, { etag, tag: release.tag_name });
@@ -475,9 +498,10 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         }
     }
 
-    logger.warn(`No GitHub release has an asset named '${expectedAssetName}'.`);
+    const wanted = expectedAssetNames.map((name) => `'${name}'`).join(' or ');
+    logger.warn(`No GitHub release has an asset matching ${wanted}.`);
     notifyDeveloper(
-        `No GitHub release found with asset matching '${expectedAssetName}'.`,
+        `No GitHub release found with an asset matching ${wanted}.`,
         'Inspected releases:',
         releases.map((r: { tag_name?: string; assets?: { name: string }[] }) => ({
             tag_name: r.tag_name,
@@ -953,6 +977,10 @@ export function compareVersionsDesc(a: string, b: string): number {
  *
  * Used as a fallback when the normal download/resolve path fails (e.g. no
  * network) so the extension can still start with a previously-cached binary.
+ *
+ * Installs from either side of the rename can sit here together, since the
+ * directory name is the version and `getExecutablePath` derives the archive
+ * and executable names from it.
  */
 export async function findExistingExecutable(
     context: vscode.ExtensionContext

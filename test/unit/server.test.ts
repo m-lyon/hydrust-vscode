@@ -49,6 +49,13 @@ const downloadStub = vi.hoisted(() => ({
     scans: 0,
 }));
 
+/** What `which` finds on PATH, by name. Anything missing is not on PATH. */
+const whichStub = vi.hoisted(() => ({ paths: {} as Record<string, string> }));
+
+vi.mock('which', () => ({
+    default: async (name: string) => whichStub.paths[name] ?? null,
+}));
+
 vi.mock('../../src/common/download', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../src/common/download')>();
     return {
@@ -114,6 +121,9 @@ import { createStubExtensionContext, resetVscodeStub, stub } from '../stubs/vsco
 const SERVER_ID = 'hydrust';
 const SERVER_NAME = 'Hydrust';
 
+/** Keeps a `--version` probe that cannot be answered from stalling a test. */
+const PROBE_TIMEOUT_MS = 500;
+
 let scratchDir: string;
 let context: ReturnType<typeof createStubExtensionContext>;
 let outputChannel: vscode.OutputChannel;
@@ -137,9 +147,17 @@ function writeBinary(name = 'hydra-lsp'): string {
 
 /** Tell the probe cache what version a binary is, so nothing is spawned. */
 function rememberVersion(binaryPath: string, version: string): void {
-    const stats = fs.statSync(binaryPath);
-    const fingerprint = `${binaryPath}|${Math.round(stats.mtimeMs)}|${stats.size}`;
-    stub.globalState.set(PROBE_CACHE_KEY, { [fingerprint]: version });
+    rememberVersions({ [binaryPath]: version });
+}
+
+/** Like rememberVersion, for several binaries at once. */
+function rememberVersions(versions: Record<string, string | null>): void {
+    const entries: Record<string, string | null> = {};
+    for (const [binaryPath, version] of Object.entries(versions)) {
+        const stats = fs.statSync(binaryPath);
+        entries[`${binaryPath}|${Math.round(stats.mtimeMs)}|${stats.size}`] = version;
+    }
+    stub.globalState.set(PROBE_CACHE_KEY, entries);
 }
 
 /** Settings with everything at its default, bar the overrides given. */
@@ -172,7 +190,8 @@ function start(settings: ExtensionSettings, projectRoot?: string) {
         outputChannel,
         outputChannel,
         asExtensionContext(context),
-        projectRoot
+        projectRoot,
+        PROBE_TIMEOUT_MS
     );
 }
 
@@ -190,6 +209,7 @@ beforeEach(() => {
     downloadStub.ensureError = undefined;
     downloadStub.existing = undefined;
     downloadStub.scans = 0;
+    whichStub.paths = {};
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
     outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
@@ -211,6 +231,9 @@ describe('the payload handed to the language client', () => {
         expect(client.serverId).toBe(SERVER_ID);
         expect(client.serverName).toBe(SERVER_NAME);
         expect(client.serverOptions.run.command).toBe(binaryPath);
+        // The subcommand goes on unconditionally, even for a v0.4.0 server
+        // that predates it and simply ignores it.
+        expect(client.serverOptions.run.args).toEqual(['server']);
         expect(client.clientOptions.initializationOptions.settings).toEqual({
             pythonInterpreter: '/usr/bin/python3',
             disabledRules: [],
@@ -294,6 +317,199 @@ describe('failures around the launch', () => {
         clientStub.startError = new Error('spawn failed');
 
         await expect(start(settingsFor(binaryPath))).rejects.toThrow('spawn failed');
+    });
+});
+
+describe('a serverPath pointing at hydrust', () => {
+    it('is used when it is a merged release', async () => {
+        const hydrust = writeBinary('hydrust');
+        rememberVersion(hydrust, 'v0.5.0');
+
+        await start(settingsFor(hydrust));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydrust);
+    });
+
+    it('is skipped with a warning when it is the pre-merge CLI', async () => {
+        const bundled = writeBinary('bundled-hydra-lsp');
+        const hydrust = writeBinary('hydrust');
+        rememberVersions({ [bundled]: 'v0.4.0', [hydrust]: 'v0.4.2' });
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: bundled, version: 'v0.4.0' };
+
+        await start(settingsFor(hydrust, { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+        expect(stub.logs.some((line) => line.startsWith('warn:') && line.includes(`Ignoring 'path' setting`)))
+            .toBe(true);
+    });
+
+    it('is skipped when it is the pre-merge CLI with an upper-case .EXE', async () => {
+        const bundled = writeBinary('bundled-hydra-lsp');
+        const hydrust = writeBinary('hydrust.EXE');
+        rememberVersions({ [bundled]: 'v0.4.0', [hydrust]: 'v0.4.2' });
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: bundled, version: 'v0.4.0' };
+
+        await start(settingsFor(hydrust, { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+
+    it('warns once per path, not on every restart', async () => {
+        const bundled = writeBinary('bundled-hydra-lsp');
+        const hydrust = writeBinary('hydrust');
+        rememberVersions({ [bundled]: 'v0.4.0', [hydrust]: 'v0.4.2' });
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: bundled, version: 'v0.4.0' };
+
+        await start(settingsFor(hydrust, { serverVersion: '0.4.0' }));
+        await start(settingsFor(hydrust, { serverVersion: '0.4.0' }));
+
+        const warnings = stub.messages.filter((m) => m.kind === 'warning' && m.message.includes(hydrust));
+        expect(warnings).toHaveLength(1);
+    });
+
+    it('is used when its version cannot be determined', async () => {
+        const hydrust = writeBinary('hydrust');
+
+        await start(settingsFor(hydrust));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydrust);
+    });
+});
+
+describe('looking for a server on PATH', () => {
+    /** Leave bundled resolution nowhere to go but an installed binary, so it never downloads. */
+    function bundledFallback(): string {
+        const bundled = writeBinary('bundled-hydra-lsp');
+        rememberVersion(bundled, 'v0.4.0');
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: bundled, version: 'v0.4.0' };
+        return bundled;
+    }
+
+    it('uses a merged hydrust when it is the only name on PATH', async () => {
+        const hydrust = writeBinary('hydrust');
+        rememberVersion(hydrust, 'v0.5.0');
+        whichStub.paths = { hydrust };
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydrust);
+    });
+
+    it('skips a pre-merge hydrust CLI and falls back to bundled', async () => {
+        const bundled = bundledFallback();
+        const hydrust = writeBinary('hydrust');
+        rememberVersion(hydrust, 'v0.4.2');
+        whichStub.paths = { hydrust };
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+
+    it('skips a pre-merge hydrust.EXE CLI on PATH', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        const hydrust = writeBinary('hydrust.EXE');
+        whichStub.paths = { 'hydra-lsp': hydraLsp, hydrust };
+        rememberVersions({ [hydraLsp]: 'v0.4.0', [hydrust]: 'v0.4.2' });
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydraLsp);
+    });
+
+    it('prefers a newer hydrust over an older hydra-lsp on PATH', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        const hydrust = writeBinary('hydrust');
+        whichStub.paths = { 'hydra-lsp': hydraLsp, hydrust };
+        rememberVersions({ [hydraLsp]: 'v0.4.0', [hydrust]: 'v0.5.0' });
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydrust);
+    });
+
+    it('prefers a newer hydra-lsp over an older merged hydrust on PATH', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        const hydrust = writeBinary('hydrust');
+        whichStub.paths = { 'hydra-lsp': hydraLsp, hydrust };
+        rememberVersions({ [hydraLsp]: 'v0.6.0', [hydrust]: 'v0.5.0' });
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydraLsp);
+    });
+
+    it('uses hydra-lsp when the hydrust beside it is the pre-merge CLI', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        const hydrust = writeBinary('hydrust');
+        whichStub.paths = { 'hydra-lsp': hydraLsp, hydrust };
+        rememberVersions({ [hydraLsp]: 'v0.4.0', [hydrust]: 'v0.4.2' });
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydraLsp);
+    });
+
+    it('skips a hydrust whose version cannot be determined and falls back to bundled', async () => {
+        const bundled = bundledFallback();
+        const hydrust = writeBinary('hydrust');
+        whichStub.paths = { hydrust };
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+
+    it.skipIf(process.platform === 'win32')('asks a hydrust remembered as unknown again, but only once per session', async () => {
+        const bundled = bundledFallback();
+        const runs = path.join(scratchDir, 'runs');
+        const hydrust = path.join(scratchDir, 'hydrust');
+        fs.writeFileSync(hydrust, `#!/bin/sh\necho run >> "${runs}"\necho "hydrust 0.5.0"\n`, { mode: 0o755 });
+        rememberVersions({ [bundled]: 'v0.4.0', [hydrust]: null });
+        whichStub.paths = { hydrust };
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydrust);
+
+        rememberVersions({ [bundled]: 'v0.4.0', [hydrust]: null });
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(bundled);
+        expect(fs.readFileSync(runs, 'utf8').trim().split('\n')).toHaveLength(1);
+    });
+
+    it('skips a hydrust.cmd shim that is the pre-merge CLI', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        const hydrust = writeBinary('hydrust.cmd');
+        whichStub.paths = { 'hydra-lsp': hydraLsp, hydrust };
+        rememberVersions({ [hydraLsp]: 'v0.4.0', [hydrust]: 'v0.4.2' });
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydraLsp);
+    });
+
+    it('prefers a merged hydrust over a hydra-lsp whose version cannot be determined', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        const hydrust = writeBinary('hydrust');
+        whichStub.paths = { 'hydra-lsp': hydraLsp, hydrust };
+        rememberVersion(hydrust, 'v0.5.0');
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydrust);
+    });
+
+    it('falls back to bundled when neither name is on PATH', async () => {
+        const bundled = bundledFallback();
+
+        await start(settingsFor('', { serverVersion: '0.4.0' }));
+
+        expect(downloadStub.scans).toBe(1);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
     });
 });
 

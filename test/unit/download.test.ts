@@ -96,19 +96,22 @@ import {
     TAG_PATTERN,
     compareVersionsDesc,
     ensureServer,
+    findExistingExecutable,
     markVersionUsed,
     rateLimitRetryTime,
     versionLastUsedKey,
 } from '../../src/common/download';
 import {
     FALLBACK_SERVER_VERSION,
-    getArchiveDirectoryName,
+    getArchiveFileName,
+    getArchiveFileNameCandidates,
     getDownloadUrl,
     getExecutablePath,
     getLibsRoot,
     getPlatformInfo,
 } from '../../src/common/constants';
-import { PLATFORM_ASSETS, TAG_PATTERN as SCRIPT_TAG_PATTERN, compareTagsDesc, pickPinnableRelease, rewritePin } from '../../scripts/pin-server-version.mjs';
+import { LEGACY_BINARY_NAME } from '../../src/common/compatTable';
+import { TAG_PATTERN as SCRIPT_TAG_PATTERN, compareTagsDesc, pickPinnableRelease, platformAssetsFor, rewritePin } from '../../scripts/pin-server-version.mjs';
 import { createStubExtensionContext, resetVscodeStub, stub } from '../stubs/vscode';
 
 const RELEASES_PAGE = 'https://github.com/m-lyon/hydra-lsp/releases/latest';
@@ -130,9 +133,10 @@ function assetUrl(tag: string): string {
     return getDownloadUrl(tag, getPlatformInfo());
 }
 
+/** The pre-rename asset name every fixture archive in this file is built as. */
 function assetName(): string {
     const info = getPlatformInfo();
-    return `${getArchiveDirectoryName(info)}.${info.archiveExt}`;
+    return `${LEGACY_BINARY_NAME}-${info.platform}.${info.archiveExt}`;
 }
 
 function redirectTo(tag: string): Reply {
@@ -158,14 +162,17 @@ function requested(url: string): number {
 }
 
 beforeAll(() => {
-    // A real archive with the layout releases use, so extraction is exercised.
+    // A real archive with the pre-rename layout releases used up to v0.4.x, so
+    // extraction is exercised. Every `publishRelease` call in this file uses a
+    // tag from that era; naming across the rename is covered separately.
     const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-archive-'));
     const info = getPlatformInfo();
-    const inner = path.join(buildDir, getArchiveDirectoryName(info));
+    const dirName = `${LEGACY_BINARY_NAME}-${info.platform}`;
+    const inner = path.join(buildDir, dirName);
     fs.mkdirSync(inner);
-    fs.writeFileSync(path.join(inner, info.executableName), '#!/bin/sh\n');
+    fs.writeFileSync(path.join(inner, `${LEGACY_BINARY_NAME}${info.executableSuffix}`), '#!/bin/sh\n');
     const archivePath = path.join(buildDir, 'server.tar.xz');
-    execFileSync('tar', ['-cJf', archivePath, '-C', buildDir, getArchiveDirectoryName(info)]);
+    execFileSync('tar', ['-cJf', archivePath, '-C', buildDir, dirName]);
     archive = fs.readFileSync(archivePath);
     fs.rmSync(buildDir, { recursive: true, force: true });
 });
@@ -618,6 +625,75 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
     });
 });
 
+describe.skipIf(process.platform === 'win32')('naming across the server rename', () => {
+    it('accepts a release published under the new (hydrust) asset name', async () => {
+        const [newName] = getArchiveFileNameCandidates(getPlatformInfo());
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.5.0', assets: [{ name: newName }] }]),
+        });
+        const executable = installOnDisk('v0.5.0');
+
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.5.0' });
+    });
+
+    it('still accepts a release published under the old (hydra-lsp) asset name', async () => {
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([{ tag_name: 'v0.4.0', assets: [{ name: assetName() }] }]),
+        });
+        const executable = installOnDisk('v0.4.0');
+
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.4.0' });
+    });
+
+    it('skips a release that names the archive differently than the table expects', async () => {
+        // The table says v0.5.0 should carry the new name; this release still
+        // carries the old one, so downloading it would 404. The older release
+        // that matches the table is used instead.
+        net.routes.set(RELEASES_PAGE, 'network-error');
+        net.routes.set(RELEASES_API, {
+            status: 200,
+            body: JSON.stringify([
+                { tag_name: 'v0.5.0', assets: [{ name: assetName() }] },
+                { tag_name: 'v0.4.0', assets: [{ name: assetName() }] },
+            ]),
+        });
+        installOnDisk('v0.5.0');
+        const executable = installOnDisk('v0.4.0');
+
+        await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.4.0' });
+        expect(stub.logs.some((line) => line.includes('naming table is out of date'))).toBe(true);
+    });
+
+    for (const order of ['legacy first', 'new first']) {
+        it(`uses a release that carries both asset names (${order})`, async () => {
+            const [newName, oldName] = getArchiveFileNameCandidates(getPlatformInfo());
+            const names = order === 'legacy first' ? [oldName, newName] : [newName, oldName];
+            net.routes.set(RELEASES_PAGE, 'network-error');
+            net.routes.set(RELEASES_API, {
+                status: 200,
+                body: JSON.stringify([{ tag_name: 'v0.5.0', assets: names.map((name) => ({ name })) }]),
+            });
+            const executable = installOnDisk('v0.5.0');
+
+            await expect(ensure()).resolves.toEqual({ path: executable, version: 'v0.5.0' });
+            expect(stub.logs.some((line) => line.includes('naming table is out of date'))).toBe(false);
+        });
+    }
+
+    it('finds the newest installed binary across both sides of the rename', async () => {
+        installOnDisk('v0.4.0');
+        const newer = installOnDisk('v0.5.0');
+
+        const found = await findExistingExecutable(asExtensionContext(context));
+
+        expect(found).toEqual({ path: newer, version: 'v0.5.0' });
+    });
+});
+
 describe('rateLimitRetryTime', () => {
     const now = 1_000_000_000_000;
 
@@ -655,12 +731,16 @@ describe('the release pin script', () => {
         const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
         const arch = Object.getOwnPropertyDescriptor(process, 'arch')!;
         try {
-            const names = combos.map(([p, a]) => {
-                Object.defineProperty(process, 'platform', { value: p });
-                Object.defineProperty(process, 'arch', { value: a });
-                return assetName();
-            });
-            expect([...names].sort()).toEqual([...PLATFORM_ASSETS].sort());
+            // Tags either side of the cutover catch the script's copy of
+            // UNIFIED_BINARY_VERSION drifting from the extension's.
+            for (const tag of ['v0.4.2', 'v0.4.9', 'v0.5.0-rc1', 'v0.5.0']) {
+                const names = combos.map(([p, a]) => {
+                    Object.defineProperty(process, 'platform', { value: p });
+                    Object.defineProperty(process, 'arch', { value: a });
+                    return getArchiveFileName(getPlatformInfo(), tag);
+                });
+                expect([...names].sort()).toEqual([...platformAssetsFor(tag)].sort());
+            }
         } finally {
             Object.defineProperty(process, 'platform', platform);
             Object.defineProperty(process, 'arch', arch);
@@ -668,16 +748,32 @@ describe('the release pin script', () => {
     });
 
     it('picks the newest stable release that has every archive', () => {
-        const all = PLATFORM_ASSETS.map((name) => ({ name }));
+        const legacy = platformAssetsFor('v0.4.2').map((name) => ({ name }));
         expect(
             pickPinnableRelease([
-                { tag_name: 'v0.6.0', prerelease: true, assets: all },
-                { tag_name: 'v0.5.0', assets: all.slice(1) },
-                { tag_name: 'v0.4.2', assets: all },
-                { tag_name: 'v0.4.1', assets: all },
+                { tag_name: 'v0.6.0', prerelease: true, assets: legacy },
+                { tag_name: 'v0.5.0', assets: legacy.slice(1) },
+                { tag_name: 'v0.4.2', assets: legacy },
+                { tag_name: 'v0.4.1', assets: legacy },
             ])
         ).toBe('v0.4.2');
         expect(pickPinnableRelease([])).toBeUndefined();
+    });
+
+    it('picks a release named the new way once the naming era moves on', () => {
+        const unified = platformAssetsFor('v0.5.0').map((name) => ({ name }));
+        const legacy = platformAssetsFor('v0.4.2').map((name) => ({ name }));
+        expect(
+            pickPinnableRelease([
+                { tag_name: 'v0.5.0', assets: unified },
+                { tag_name: 'v0.4.2', assets: legacy },
+            ])
+        ).toBe('v0.5.0');
+        // A v0.5.0+ release only carrying the old asset names is incomplete for
+        // its own era, even though the names happen to exist as strings.
+        expect(
+            pickPinnableRelease([{ tag_name: 'v0.5.0', assets: legacy }])
+        ).toBeUndefined();
     });
 
     it('accepts exactly the tags the extension accepts', () => {

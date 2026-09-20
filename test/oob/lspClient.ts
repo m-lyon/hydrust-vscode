@@ -14,6 +14,8 @@ import { pathToFileURL } from 'node:url';
 export interface HandshakeOptions {
     /** Absolute path to the server binary. */
     binaryPath: string;
+    /** Arguments that make it start its LSP loop. Empty before v0.5.0. */
+    args?: string[];
     /** The `capabilities` object the client advertises. */
     capabilities: Record<string, unknown>;
     /** Workspace root sent as `rootUri`. */
@@ -75,7 +77,7 @@ export interface HandshakeResult {
  */
 export async function initializeHandshake(options: HandshakeOptions): Promise<HandshakeResult> {
     const timeoutMs = options.timeoutMs ?? 30000;
-    const child: ChildProcessWithoutNullStreams = spawn(options.binaryPath, [], {
+    const child: ChildProcessWithoutNullStreams = spawn(options.binaryPath, options.args ?? [], {
         stdio: ['pipe', 'pipe', 'pipe'],
     });
 

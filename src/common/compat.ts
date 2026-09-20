@@ -2,12 +2,12 @@ import * as vscode from 'vscode';
 import * as fs from 'fs-extra';
 import { spawn } from 'child_process';
 import { logger } from './logger';
-import { BINARY_NAME } from './constants';
 import {
     ASSUMED_PRE_NEGOTIATION_VERSION,
     CAPABILITY_NEGOTIATION_VERSION,
     CLIENT_PROTOCOL_VERSION,
     CompatReport,
+    DISPLAY_NAME,
     FEATURE_COMPAT,
     HydrustCapabilities,
     MINIMUM_SERVER_VERSION,
@@ -132,17 +132,19 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
 
 /**
  * Work out the version of a binary, remembering the answer so restarts do not
- * keep spawning processes.
+ * keep spawning processes. `retryUnknown` ignores a remembered failure and
+ * asks the binary again.
  */
-async function probeBinaryVersion(
+export async function probeBinaryVersion(
     binaryPath: string,
     context: vscode.ExtensionContext,
-    timeoutMs?: number
+    timeoutMs?: number,
+    retryUnknown = false
 ): Promise<ServerVersion | undefined> {
     const fingerprint = await binaryFingerprint(binaryPath);
     const cache = context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {});
 
-    if (fingerprint && Object.prototype.hasOwnProperty.call(cache, fingerprint)) {
+    if (fingerprint && !(retryUnknown && cache[fingerprint] === null) && Object.prototype.hasOwnProperty.call(cache, fingerprint)) {
         const cached = cache[fingerprint];
         if (cached === null) {
             logger.debug(`Version of ${binaryPath} is still unknown (remembered from an earlier check).`);
@@ -164,7 +166,7 @@ async function probeBinaryVersion(
         await rememberVersion(context, fingerprint, version);
     }
     if (version) {
-        logger.info(`${BINARY_NAME} at ${binaryPath} reports ${formatServerVersion(version)}.`);
+        logger.info(`${DISPLAY_NAME} at ${binaryPath} reports ${formatServerVersion(version)}.`);
     }
     return version;
 }
@@ -292,8 +294,9 @@ export class ServerCompat {
     /**
      * Find out everything possible about the binary before it is launched.
      *
-     * The bundled path already knows its release tag, so no process is spawned.
-     * The other two paths have to ask the binary itself.
+     * When the resolution path already knows the version (the bundled release
+     * tag, or a probe made while choosing the binary), no process is spawned.
+     * Otherwise the binary has to be asked itself.
      *
      * `probeTimeoutMs` only exists so the tests can make the `--version` probe
      * give up quickly. The extension never passes it.
@@ -318,13 +321,13 @@ export class ServerCompat {
 
         if (!version) {
             logger.warn(
-                `Could not determine the ${BINARY_NAME} version before launch. ` +
+                `Could not determine the ${DISPLAY_NAME} version before launch. ` +
                 'Assuming the least capable behaviour: no optional features, and the ' +
                 'settings payload will be sent exactly as configured.'
             );
         } else if (!isAtLeast(version, MINIMUM_SERVER_VERSION)) {
             logger.warn(
-                `${BINARY_NAME} ${formatServerVersion(version)} is older than the minimum ` +
+                `${DISPLAY_NAME} ${formatServerVersion(version)} is older than the minimum ` +
                 `supported ${formatServerVersion(MINIMUM_SERVER_VERSION)}.`
             );
         }
@@ -354,7 +357,7 @@ export class ServerCompat {
         for (const rewrite of rewrites) {
             logger.info(
                 `Sending disabled rule '${rewrite.from}' as '${rewrite.to}': that is what ` +
-                `${BINARY_NAME} ${this.versionLabel} calls it.`
+                `${DISPLAY_NAME} ${this.versionLabel} calls it.`
             );
         }
         return next;
@@ -391,7 +394,7 @@ export class ServerCompat {
             logger.debug(`Capability block: ${JSON.stringify(this.capabilities)}`);
         } else if (this.version && isAtLeast(this.version, CAPABILITY_NEGOTIATION_VERSION)) {
             logger.warn(
-                `${BINARY_NAME} ${this.versionLabel} should describe its own capabilities but did not. ` +
+                `${DISPLAY_NAME} ${this.versionLabel} should describe its own capabilities but did not. ` +
                 'Falling back to the built-in version table.'
             );
         } else if (!this.version) {

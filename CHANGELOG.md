@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.1.7]
+
+- Prepared for the server binary being renamed to `hydrust` in server `v0.5.0`: releases, downloaded archives and cached binaries are recognised under either name, and the language server is now started with the `server` subcommand. Works unchanged against every server released so far, and against a `hydra-lsp` already on `PATH`
+
 ## [0.1.6]
 
 - Fixed the extension failing to start when the GitHub API rate limit is exhausted

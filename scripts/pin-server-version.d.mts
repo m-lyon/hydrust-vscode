@@ -1,6 +1,6 @@
-export declare const PLATFORM_ASSETS: string[];
-
 export declare const TAG_PATTERN: RegExp;
+
+export declare function platformAssetsFor(tag: string): string[];
 
 export declare function compareTagsDesc(a: string, b: string): number;
 

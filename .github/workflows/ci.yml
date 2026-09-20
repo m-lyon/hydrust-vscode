@@ -99,10 +99,11 @@ jobs:
         working-directory: hydra-lsp
         run: cargo build
 
+      # No HYDRA_LSP_BINARY here: the suite looks in the sibling checkout's
+      # target/debug itself, which is the same path, and finds the binary under
+      # either name. Pinning it to one name would break on the rename.
       - name: Contract tests against the built server
         working-directory: hydrust-vscode
-        env:
-          HYDRA_LSP_BINARY: ${{ github.workspace }}/hydra-lsp/target/debug/hydra-lsp
         run: npm run test:contract
 
       - name: Audit the compatibility table against the tagged sources
