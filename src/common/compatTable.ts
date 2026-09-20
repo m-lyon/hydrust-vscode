@@ -36,9 +36,13 @@ function ver(major: number, minor: number, patch: number): ServerVersion {
  *
  * Deliberately forgiving: it copes with 'hydra-lsp 0.4.0', 'v0.3.0',
  * '0.3.0-dev' and a trailing newline, because the exact shape of `--version`
- * output is not something the extension should depend on. Servers from
- * v0.5.0 onwards print whatever clap makes of the `hydrust` crate name, which
- * matches the same pattern.
+ * output is not something the extension should depend on. From v0.5.0 the
+ * binary prints 'hydrust 0.5.0' — clap's default for the renamed crate.
+ *
+ * Note that this is `<binary> --version`, never `<binary> server --version`:
+ * `server` takes a catch-all so an editor's own transport flags do not stop it
+ * starting, and that catch-all swallows `--version` too, so asking the
+ * subcommand for a version starts a language server instead of answering.
  */
 export function parseServerVersion(text: string | undefined): ServerVersion | undefined {
     if (!text) {

@@ -47,25 +47,26 @@ import { REPO_ROOT } from './serverRepo';
  * Where to find the server binary, and a clear complaint when it is missing.
  *
  * Either name is accepted, since this suite runs against whatever is in the
- * server checkout's target directory and the rename lands there before it
- * lands in a release. Whichever is picked is launched with `SERVER_ARGS`, as the
- * extension does, so the handshake also checks that a legacy `hydra-lsp`
- * ignores the `server` argument.
+ * server checkout's target directory. Whichever is picked is launched with
+ * `SERVER_ARGS`, as the extension does, so the handshake also checks that a
+ * legacy `hydra-lsp` ignores the `server` argument.
  *
- * Until the two binaries are merged `cargo build` produces both and only
- * `hydra-lsp` is the language server — a `hydrust` next to it is the CLI,
- * which exits 2 on `server`. So a `hydrust` is only picked when it reports
- * the merged version, and it then wins over any leftover `hydra-lsp`.
+ * `hydrust` is tried first and, since the merge, is the only name `cargo
+ * build` produces. A `hydra-lsp` in `target/debug` is now necessarily a stale
+ * artefact of an older checkout, so it must never win silently — hence the
+ * version gate as well as the ordering: a `hydrust` is taken only when it
+ * reports the merged version, which a pre-merge CLI-only `hydrust` did not
+ * have the `server` subcommand to back up.
  */
 function requireBinary(): string {
     const targetDir = path.resolve(REPO_ROOT, '..', 'hydra-lsp', 'target', 'debug');
     const candidates = process.env.HYDRA_LSP_BINARY
         ? [path.resolve(process.env.HYDRA_LSP_BINARY)]
         : [
-            path.join(targetDir, 'hydra-lsp'),
-            path.join(targetDir, 'hydra-lsp.exe'),
             path.join(targetDir, 'hydrust'),
             path.join(targetDir, 'hydrust.exe'),
+            path.join(targetDir, 'hydra-lsp'),
+            path.join(targetDir, 'hydra-lsp.exe'),
         ];
 
     const found = candidates.filter((candidate) => fs.existsSync(candidate));
