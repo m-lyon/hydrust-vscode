@@ -24,7 +24,7 @@ export interface ServerVersion {
 }
 
 /** Where the extension found the server binary it is about to run. */
-export type ServerSource = 'serverPath' | 'environment' | 'bundled';
+export type ServerSource = 'serverPath' | 'pythonEnvironment' | 'environment' | 'bundled';
 
 /** Build a version literal. Only used to keep the table below readable. */
 function ver(major: number, minor: number, patch: number): ServerVersion {

@@ -18,6 +18,7 @@ import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVe
 import { ResolvedBinary, ServerCompat, probeBinaryVersion } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
+import { findHydrustInInterpreter } from './pythonEnvironment';
 import {
     LanguageClient,
     LanguageClientOptions,
@@ -85,7 +86,41 @@ function recheckUnknownOnce(binaryPath: string): boolean {
 }
 
 /**
- * Find the hydrust server binary, and note which of the three resolution paths
+ * Look for a hydrust installed in the selected Python environment, for example
+ * by `uv add --dev hydrust`. Resolves to undefined whenever that does not give a
+ * usable server, so the caller can carry on to PATH: in particular for every
+ * environment without the `hydrust` package, which includes every server before
+ * v0.5.0, since none was published to PyPI.
+ */
+async function findInPythonEnvironment(
+    interpreter: string,
+    context: vscode.ExtensionContext,
+    probeTimeoutMs?: number
+): Promise<ResolvedBinary | undefined> {
+    const binaryPath = await findHydrustInInterpreter(interpreter);
+    if (!binaryPath) {
+        return undefined;
+    }
+    if (!(await fsapi.pathExists(binaryPath))) {
+        logger.warn(`Ignoring ${binaryPath}: reported by ${interpreter} but not found on disk.`);
+        return undefined;
+    }
+    const version = await probeBinaryVersion(binaryPath, context, probeTimeoutMs, recheckUnknownOnce(binaryPath));
+    if (!isUsableServer(binaryPath, version)) {
+        logger.warn(
+            `Ignoring ${binaryPath} from ${interpreter}: ` +
+            (version
+                ? `not ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
+                : 'could not determine its version.')
+        );
+        return undefined;
+    }
+    logger.info(`Using ${binaryPath}, installed in the environment of ${interpreter}`);
+    return { path: binaryPath, source: 'pythonEnvironment', version: version && formatServerVersion(version) };
+}
+
+/**
+ * Find the hydrust server binary, and note which of the resolution paths
  * found it, along with its version when already known (the bundled release
  * tag, or a probe made while choosing), which saves asking the binary again.
  */
@@ -124,6 +159,21 @@ async function findBinaryPath(
 
     // 2. Use environment if explicitly requested
     if (settings.importStrategy === 'fromEnvironment') {
+        // 2a. The selected Python environment. Its hydrust wins over one on
+        // PATH even when that one is newer: it is the version the project
+        // pinned, and the one `hydrust check` in that environment would run.
+        if (settings.interpreter) {
+            try {
+                const fromPython = await findInPythonEnvironment(settings.interpreter, context, probeTimeoutMs);
+                if (fromPython) {
+                    return fromPython;
+                }
+            } catch (err) {
+                logger.debug(`Error checking the Python environment: ${err}`);
+            }
+        }
+
+        // 2b. PATH.
         try {
             // Pick the highest version among the names on PATH, so an old
             // `hydra-lsp` cannot shadow a newer `hydrust`. A version that

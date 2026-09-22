@@ -1,5 +1,9 @@
 # Change Log
 
+## [Unreleased]
+
+- With `importStrategy: fromEnvironment`, a `hydrust` installed in the selected Python environment (for example by `uv add --dev hydrust`) is now found and used ahead of one on `PATH`, even when VS Code was not started from an activated shell. The extension asks the interpreter through the package's `find_hydrust_bin()`, which ships with server v0.5.0 on PyPI; for any environment without the package, including every older server, resolution falls through to `PATH` and the bundled server exactly as before
+
 ## [0.1.7]
 
 - Prepared for the server binary being renamed to `hydrust` in server `v0.5.0`: releases, downloaded archives and cached binaries are recognised under either name, and the language server is now started with the `server` subcommand. Works unchanged against every server released so far, and against a `hydra-lsp` already on `PATH`

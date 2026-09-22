@@ -33,7 +33,7 @@
       "properties": {
         "hydrust.serverPath": {
           "default": "",
-          "description": "Path to the hydrust executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
+          "description": "Path to the hydrust executable. Takes priority over the Python environment, PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
           "scope": "resource",
           "type": "string"
         },
@@ -51,7 +51,7 @@
             "useBundled"
           ],
           "enumDescriptions": [
-            "Use the hydrust server from the environment (available on PATH, under either 'hydrust' or the older 'hydra-lsp' name), whilst falling back to bundled executable if not found.",
+            "Use the hydrust server from the environment: first one installed in the selected Python environment (e.g. by `uv add --dev hydrust`, from server v0.5.0), then one on PATH under either 'hydrust' or the older 'hydra-lsp' name, falling back to the bundled executable if neither is found.",
             "Always use the bundled hydrust executable."
           ],
           "scope": "window",
