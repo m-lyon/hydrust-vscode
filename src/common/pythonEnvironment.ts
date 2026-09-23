@@ -177,9 +177,15 @@ export function findHydrustInInterpreter(
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
             finish(COULD_NOT_ASK);
         });
-        child.on('close', (code) => {
+        child.on('close', (code, signal) => {
             clearTimeout(timer);
             cleanUp();
+            if (code === null && signal) {
+                // Killed rather than answered, so the environment is still unknown.
+                logger.debug(`${interpreter} was killed by ${signal} when asked where hydrust is installed.`);
+                finish(COULD_NOT_ASK);
+                return;
+            }
             if (code !== 0) {
                 if (/No module named '?hydrust'?/.test(stderr)) {
                     logger.debug(`hydrust is not installed in the environment of ${interpreter}.`);

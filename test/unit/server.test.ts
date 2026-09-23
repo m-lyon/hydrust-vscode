@@ -642,6 +642,8 @@ describe('looking for a server in the selected Python environment', () => {
     });
 
     it('asks again when the interpreter could not be run at all', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
         pythonStub.binaries[INTERPRETER] = 'couldNotAsk';
         const onPath = writeBinary('hydrust');
         rememberVersion(onPath, 'v0.5.0');
@@ -652,6 +654,7 @@ describe('looking for a server in the selected Python environment', () => {
         await start(settings);
 
         expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
     });
 
     it('falls back to PATH when the environment has no hydrust', async () => {

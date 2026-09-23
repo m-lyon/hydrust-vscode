@@ -134,6 +134,12 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(lookupDirs()).toEqual(before);
     });
 
+    it('is one that could not be asked when it dies from a signal', async () => {
+        const interpreter = fakeInterpreter('kill -9 $$');
+
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'couldNotAsk' });
+    });
+
     it('gives up on an interpreter that does not answer in time', async () => {
         const interpreter = fakeInterpreter(`sleep 10\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`);
 
