@@ -137,7 +137,7 @@ export function findHydrustInInterpreter(
 
         const cleanUp = () => {
             try {
-                fs.rmSync(workingDir, { recursive: true, force: true });
+                fs.rmSync(workingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
             } catch {
                 // Nothing useful to do; it is an empty directory in the temp dir.
             }
