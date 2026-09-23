@@ -179,7 +179,7 @@ export function findHydrustInInterpreter(
             if (!binaryPath || !path.isAbsolute(binaryPath)) {
                 logger.debug(
                     `${interpreter} gave an unusable hydrust location: ` +
-                    JSON.stringify(stdout.slice(0, 512))
+                    JSON.stringify(stdout.slice(-512))
                 );
                 finish(undefined);
                 return;
