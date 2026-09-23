@@ -43,17 +43,20 @@ function fakeInterpreter(body: string): string {
 }
 
 /**
- * Put a stand-in `hydrust` package on PYTHONPATH whose `find_hydrust_bin()`
- * runs the given body.
+ * An interpreter that runs the real python3 with a stand-in `hydrust` package
+ * importable. The lookup drops any inherited PYTHONPATH, so the wrapper sets
+ * it on the spawn it controls.
  */
-function installStandInPackage(findBody: string): void {
+function standInInterpreter(initBody: string): string {
     const site = path.join(scratchDir, 'site');
     fs.mkdirSync(path.join(site, 'hydrust'), { recursive: true });
-    fs.writeFileSync(
-        path.join(site, 'hydrust', '__init__.py'),
-        `def find_hydrust_bin():\n    ${findBody}\n`
-    );
-    process.env.PYTHONPATH = site;
+    fs.writeFileSync(path.join(site, 'hydrust', '__init__.py'), initBody);
+    return fakeInterpreter(`PYTHONPATH="${site}" exec "${python3}" "$@"`);
+}
+
+/** A stand-in package whose `find_hydrust_bin()` runs the given body. */
+function standInFinder(findBody: string): string {
+    return standInInterpreter(`def find_hydrust_bin():\n    ${findBody}\n`);
 }
 
 /** The path an interpreter reported, or undefined for any other answer. */
@@ -122,19 +125,19 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
     it('rejects a path printed without the marker', async () => {
         const interpreter = fakeInterpreter('echo /venv/bin/hydrust');
 
-        expect(await lookUpPath(interpreter)).toBeUndefined();
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
     });
 
     it('rejects a relative path', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}bin/hydrust`);
 
-        expect(await lookUpPath(interpreter)).toBeUndefined();
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
     });
 
     it('rejects empty output', async () => {
         const interpreter = fakeInterpreter('true');
 
-        expect(await lookUpPath(interpreter)).toBeUndefined();
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
     });
 
     it('treats a non-zero exit as not found, even with a path on stdout', async () => {
@@ -213,15 +216,14 @@ describe('an interpreter that cannot be run', () => {
     });
 });
 
-describe.skipIf(!python3)('the lookup script, run by a real python3', () => {
+describe.skipIf(!python3 || isWindows)('the lookup script, run by a real python3', () => {
     it('returns what find_hydrust_bin() returns', async () => {
         const binary = path.join(scratchDir, 'bin', 'hydrust');
-        installStandInPackage(`return ${JSON.stringify(binary)}`);
 
-        expect(await lookUpPath(python3!)).toBe(binary);
+        expect(await lookUpPath(standInFinder(`return ${JSON.stringify(binary)}`))).toBe(binary);
     });
 
-    it.skipIf(isWindows)('is not found when the hydrust package is not installed', async () => {
+    it('is not found when the hydrust package is not installed', async () => {
         // `-S` skips site-packages, so a hydrust installed on the machine
         // running the tests cannot leak in.
         delete process.env.PYTHONPATH;
@@ -231,24 +233,31 @@ describe.skipIf(!python3)('the lookup script, run by a real python3', () => {
     });
 
     it('is not found when find_hydrust_bin() raises', async () => {
-        installStandInPackage('raise FileNotFoundError("/venv/bin/hydrust")');
+        const interpreter = standInFinder('raise FileNotFoundError("/venv/bin/hydrust")');
 
-        expect(await lookUpPath(python3!)).toBeUndefined();
+        expect(await lookUpPath(interpreter)).toBeUndefined();
+    });
+
+    it('ignores a hydrust that only an inherited PYTHONPATH would find', async () => {
+        const site = path.join(scratchDir, 'other-site');
+        fs.mkdirSync(path.join(site, 'hydrust'), { recursive: true });
+        fs.writeFileSync(
+            path.join(site, 'hydrust', '__init__.py'),
+            'def find_hydrust_bin():\n    return "/other/bin/hydrust"\n'
+        );
+        process.env.PYTHONPATH = site;
+        const interpreter = fakeInterpreter(`exec "${python3}" "$@"`);
+
+        expect(await lookUpPath(interpreter)).toBeUndefined();
     });
 
     it('is not found for a hydrust package without find_hydrust_bin()', async () => {
-        const site = path.join(scratchDir, 'site');
-        fs.mkdirSync(path.join(site, 'hydrust'), { recursive: true });
-        fs.writeFileSync(path.join(site, 'hydrust', '__init__.py'), '');
-        process.env.PYTHONPATH = site;
-
-        expect(await lookUpPath(python3!)).toBeUndefined();
+        expect(await lookUpPath(standInInterpreter(''))).toBeUndefined();
     });
 
     it('keeps a non-ASCII path intact', async () => {
         const binary = path.join(scratchDir, 'prøject', 'bin', 'hydrust');
-        installStandInPackage(`return ${JSON.stringify(binary)}`);
 
-        expect(await lookUpPath(python3!)).toBe(binary);
+        expect(await lookUpPath(standInFinder(`return ${JSON.stringify(binary)}`))).toBe(binary);
     });
 });

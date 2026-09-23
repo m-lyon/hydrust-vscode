@@ -27,8 +27,8 @@ export const BINARY_LINE_PREFIX = 'HYDRUST_BIN:';
 const FIND_BINARY_SCRIPT = [
     'import os',
     'from hydrust import find_hydrust_bin',
-    `print(${JSON.stringify(BINARY_LINE_PREFIX)} + os.fsdecode(find_hydrust_bin()))`,
-].join('\n');
+    `print('${BINARY_LINE_PREFIX}' + os.fsdecode(find_hydrust_bin()))`,
+].join('; ');
 
 /** Cap on how much output is kept, so a noisy interpreter cannot grow it unbounded. */
 const OUTPUT_LIMIT = 4096;
@@ -114,16 +114,29 @@ export function findHydrustInInterpreter(
             }
         };
 
+        // The answer must come from the selected environment alone, so the
+        // inherited import settings are dropped: PYTHONPATH is searched ahead
+        // of the environment's own site-packages, so a shell that exported it
+        // could otherwise make another checkout's hydrust answer.
+        const env: NodeJS.ProcessEnv = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONSAFEPATH: '1' };
+        delete env.PYTHONPATH;
+        delete env.PYTHONHOME;
+        const options = {
+            cwd: workingDir,
+            // A path is printed, so make sure a non-ASCII one survives a
+            // non-UTF-8 console encoding on Windows.
+            env,
+            stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+        };
+
         let child;
         try {
-            child = spawn(interpreter, ['-c', FIND_BINARY_SCRIPT], {
-                cwd: workingDir,
-                // A path is printed, so make sure a non-ASCII one survives a
-                // non-UTF-8 console encoding on Windows.
-                env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONSAFEPATH: '1' },
-                stdio: ['ignore', 'pipe', 'pipe'],
-                windowsHide: true,
-            });
+            // Node refuses to spawn a .bat/.cmd directly, which is what a
+            // pyenv-win shim is, so those go through the shell instead.
+            child = /\.(bat|cmd)$/i.test(interpreter)
+                ? spawn(`"${interpreter}" -c "${FIND_BINARY_SCRIPT}"`, { ...options, shell: true })
+                : spawn(interpreter, ['-c', FIND_BINARY_SCRIPT], options);
         } catch (err) {
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
             cleanUp();
