@@ -102,6 +102,17 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(await lookUpPath(interpreter)).toBe(`/venv/${'a'.repeat(5000)}/bin/hydrust`);
     });
 
+    it('keeps the answer after a runaway line longer than the line cap', async () => {
+        // Over 64 KB with no newline, so the line buffer is dropped before the
+        // answer that follows it arrives.
+        const interpreter = fakeInterpreter(
+            `awk 'BEGIN { s = "junk"; while (length(s) < 70000) s = s s; printf "%s", s }'; sleep 0.2\n`
+            + `echo\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`
+        );
+
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
+    });
+
     it('ignores an unmarked absolute path printed after the answer', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\necho /tmp/not-the-server`);
 
@@ -132,6 +143,20 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         const before = lookupDirs();
         expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
         expect(lookupDirs()).toEqual(before);
+    });
+
+    it('keeps the first marked line when another is printed after it', async () => {
+        const interpreter = fakeInterpreter(
+            `echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\necho ${BINARY_LINE_PREFIX}/tmp/not-the-server`
+        );
+
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
+    });
+
+    it('is one that could not be asked when it fails before answering', async () => {
+        const interpreter = fakeInterpreter('echo "ImportError: bad sitecustomize" >&2\nexit 1');
+
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'couldNotAsk' });
     });
 
     it('is one that could not be asked when it dies from a signal', async () => {

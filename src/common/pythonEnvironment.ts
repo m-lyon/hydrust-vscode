@@ -43,8 +43,9 @@ const LINE_LIMIT = 64 * 1024;
 /**
  * What an interpreter had to say. `notInstalled` is a definitive answer from
  * an interpreter that ran; `couldNotAsk` means it could not be asked at all
- * (it could not be started, or did not answer in time), which says nothing
- * about the environment and is worth asking again later.
+ * (it could not be started, did not answer in time, or failed before it got as
+ * far as answering), which says nothing about the environment and is worth
+ * asking again later.
  */
 export type InterpreterLookup =
     | { kind: 'found'; path: string }
@@ -163,7 +164,9 @@ export function findHydrustInInterpreter(
             }
             for (const line of lines) {
                 if (line.trim().startsWith(BINARY_LINE_PREFIX)) {
-                    markedLine = line.trim();
+                    // The first marked line is the answer; the script prints it
+                    // last, so anything marked after it is shutdown noise.
+                    markedLine ??= line.trim();
                 }
             }
         });
@@ -189,18 +192,29 @@ export function findHydrustInInterpreter(
             if (code !== 0) {
                 if (/No module named '?hydrust'?/.test(stderr)) {
                     logger.debug(`hydrust is not installed in the environment of ${interpreter}.`);
-                } else {
+                    finish(NOT_INSTALLED);
+                    return;
+                }
+                if (/find_hydrust_bin/.test(stderr)) {
                     logger.debug(
-                        `${interpreter} could not locate a hydrust binary (exit code ${code}): ` +
+                        `${interpreter} has a hydrust that cannot say where its binary is (exit code ${code}): ` +
                         stderr.trim().slice(-OUTPUT_LIMIT)
                     );
+                    finish(NOT_INSTALLED);
+                    return;
                 }
-                finish(NOT_INSTALLED);
+                // The interpreter never got as far as answering, so the
+                // environment is still unknown and worth asking about again.
+                logger.debug(
+                    `${interpreter} failed before it could say where hydrust is (exit code ${code}): ` +
+                    stderr.trim().slice(-OUTPUT_LIMIT)
+                );
+                finish(COULD_NOT_ASK);
                 return;
             }
             // A last line without a trailing newline is still an answer.
             if (pending.trim().startsWith(BINARY_LINE_PREFIX)) {
-                markedLine = pending.trim();
+                markedLine ??= pending.trim();
             }
             const binaryPath = markedLine?.slice(BINARY_LINE_PREFIX.length).trim();
             if (!binaryPath || !path.isAbsolute(binaryPath)) {
