@@ -34,6 +34,13 @@ const FIND_BINARY_SCRIPT = [
 const OUTPUT_LIMIT = 4096;
 
 /**
+ * Cap on a single unterminated line, well above any real path (PATH_MAX is
+ * 4096 on Linux, and a long path on Windows can reach ~32767), so only
+ * runaway output is dropped.
+ */
+const LINE_LIMIT = 64 * 1024;
+
+/**
  * Find the `hydrust` binary installed in the environment of a Python
  * interpreter, such as one added with `uv add --dev hydrust` or
  * `pip install hydrust`.
@@ -134,7 +141,7 @@ export function findHydrustInInterpreter(
             stdout = (stdout + chunk).slice(-OUTPUT_LIMIT);
             const lines = (pending + chunk).split(/\r?\n/);
             pending = lines.pop() ?? '';
-            if (pending.length > OUTPUT_LIMIT) {
+            if (pending.length > LINE_LIMIT) {
                 // An absurdly long line is not the answer; drop it rather than
                 // let it grow unbounded. What follows no longer starts with
                 // the marker, so it cannot be mistaken for one.

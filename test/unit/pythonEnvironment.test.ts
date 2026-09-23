@@ -84,6 +84,18 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(await findHydrustInInterpreter(interpreter)).toBe('/venv/bin/hydrust');
     });
 
+    it('keeps a deeply nested path longer than the output buffer', async () => {
+        // Arrives unterminated, so the line buffer holds far more than the
+        // diagnostic cap before the newline that completes the answer.
+        const interpreter = fakeInterpreter(
+            `long=$(awk 'BEGIN { while (length(s) < 5000) s = s "a"; print s }')\n`
+            + `printf '%s' "junk-$long"; sleep 0.2; printf '\\n'\n`
+            + `printf '%s' "${BINARY_LINE_PREFIX}/venv/$long"; sleep 0.2; printf '/bin/hydrust\\n'`
+        );
+
+        expect(await findHydrustInInterpreter(interpreter)).toBe(`/venv/${'a'.repeat(5000)}/bin/hydrust`);
+    });
+
     it('ignores an unmarked absolute path printed after the answer', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\necho /tmp/not-the-server`);
 
