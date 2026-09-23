@@ -619,6 +619,24 @@ describe('looking for a server in the selected Python environment', () => {
         expect(pythonStub.lookups).toEqual([INTERPRETER]);
     });
 
+    it('asks again after a restart, so a newly installed hydrust is found', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+
+        await start(settings);
+        forgetInterpreterLookups();
+        const fromEnv = environmentHydrust();
+        rememberVersion(fromEnv, 'v0.5.0');
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
+    });
+
     it('falls back to PATH when the environment has no hydrust', async () => {
         const onPath = writeBinary('hydrust');
         rememberVersion(onPath, 'v0.5.0');

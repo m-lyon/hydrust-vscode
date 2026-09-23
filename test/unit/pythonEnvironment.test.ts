@@ -71,6 +71,14 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(await findHydrustInInterpreter(interpreter)).toBe('/venv/bin/hydrust');
     });
 
+    it('keeps the answer when more than the buffer is printed after it', async () => {
+        const interpreter = fakeInterpreter(
+            `echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\nawk 'BEGIN { for (i = 0; i < 200; i++) print "noisy shutdown warning" }'`
+        );
+
+        expect(await findHydrustInInterpreter(interpreter)).toBe('/venv/bin/hydrust');
+    });
+
     it('ignores an unmarked absolute path printed after the answer', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\necho /tmp/not-the-server`);
 

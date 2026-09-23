@@ -58,6 +58,10 @@ export function findHydrustInInterpreter(
         let settled = false;
         let stdout = '';
         let stderr = '';
+        /** The marked answer, kept as it arrives so later output cannot evict it. */
+        let markedLine: string | undefined;
+        /** Whatever of the current line has arrived so far. */
+        let pending = '';
 
         const finish = (value: string | undefined) => {
             if (!settled) {
@@ -124,10 +128,23 @@ export function findHydrustInInterpreter(
         child.stdout?.setEncoding('utf8');
         child.stderr?.setEncoding('utf8');
         child.stdout?.on('data', (chunk: string) => {
-            // Keep the tail, not the head: a noisy prologue must not push the
-            // answer out, and a line cut short at the front no longer carries
-            // the marker, so it cannot be mistaken for a complete path.
+            // Pick the answer out as it arrives: output from an atexit hook or
+            // a .pth file, before or after it, cannot then push it out of the
+            // capped buffer, which is only kept for the diagnostic log.
             stdout = (stdout + chunk).slice(-OUTPUT_LIMIT);
+            const lines = (pending + chunk).split(/\r?\n/);
+            pending = lines.pop() ?? '';
+            if (pending.length > OUTPUT_LIMIT) {
+                // An absurdly long line is not the answer; drop it rather than
+                // let it grow unbounded. What follows no longer starts with
+                // the marker, so it cannot be mistaken for one.
+                pending = '';
+            }
+            for (const line of lines) {
+                if (line.trim().startsWith(BINARY_LINE_PREFIX)) {
+                    markedLine = line.trim();
+                }
+            }
         });
         child.stderr?.on('data', (chunk: string) => {
             if (stderr.length < OUTPUT_LIMIT) {
@@ -155,13 +172,11 @@ export function findHydrustInInterpreter(
                 finish(undefined);
                 return;
             }
-            // Only the marked line: a sitecustomize, .pth file or atexit hook
-            // may print something of its own before or after the answer.
-            const marked = stdout
-                .split(/\r?\n/)
-                .map((line) => line.trim())
-                .filter((line) => line.startsWith(BINARY_LINE_PREFIX));
-            const binaryPath = marked[marked.length - 1]?.slice(BINARY_LINE_PREFIX.length).trim();
+            // A last line without a trailing newline is still an answer.
+            if (pending.trim().startsWith(BINARY_LINE_PREFIX)) {
+                markedLine = pending.trim();
+            }
+            const binaryPath = markedLine?.slice(BINARY_LINE_PREFIX.length).trim();
             if (!binaryPath || !path.isAbsolute(binaryPath)) {
                 logger.debug(
                     `${interpreter} gave an unusable hydrust location: ` +
