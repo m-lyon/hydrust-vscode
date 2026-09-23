@@ -56,6 +56,12 @@ function installStandInPackage(findBody: string): void {
     process.env.PYTHONPATH = site;
 }
 
+/** The path an interpreter reported, or undefined for any other answer. */
+async function lookUpPath(interpreter: string, timeoutMs?: number): Promise<string | undefined> {
+    const result = await findHydrustInInterpreter(interpreter, timeoutMs);
+    return result.kind === 'found' ? result.path : undefined;
+}
+
 /** The working directories lookups make, so a test can tell one was left behind. */
 function lookupDirs(): string[] {
     return fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith('hydrust-lookup-')).sort();
@@ -65,7 +71,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
     it('returns the path it prints', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust`);
 
-        expect(await findHydrustInInterpreter(interpreter)).toBe('/venv/bin/hydrust');
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
     it('ignores output printed before and after the answer', async () => {
@@ -73,7 +79,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
             `echo "hello from sitecustomize"\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust\necho "goodbye from atexit"`
         );
 
-        expect(await findHydrustInInterpreter(interpreter)).toBe('/venv/bin/hydrust');
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
     it('keeps the answer when more than the buffer is printed after it', async () => {
@@ -81,7 +87,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
             `echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\nawk 'BEGIN { for (i = 0; i < 200; i++) print "noisy shutdown warning" }'`
         );
 
-        expect(await findHydrustInInterpreter(interpreter)).toBe('/venv/bin/hydrust');
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
     it('keeps a deeply nested path longer than the output buffer', async () => {
@@ -93,37 +99,39 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
             + `printf '%s' "${BINARY_LINE_PREFIX}/venv/$long"; sleep 0.2; printf '/bin/hydrust\\n'`
         );
 
-        expect(await findHydrustInInterpreter(interpreter)).toBe(`/venv/${'a'.repeat(5000)}/bin/hydrust`);
+        expect(await lookUpPath(interpreter)).toBe(`/venv/${'a'.repeat(5000)}/bin/hydrust`);
     });
 
     it('ignores an unmarked absolute path printed after the answer', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\necho /tmp/not-the-server`);
 
-        expect(await findHydrustInInterpreter(interpreter)).toBe('/venv/bin/hydrust');
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
     it('rejects a path printed without the marker', async () => {
         const interpreter = fakeInterpreter('echo /venv/bin/hydrust');
 
-        expect(await findHydrustInInterpreter(interpreter)).toBeUndefined();
+        expect(await lookUpPath(interpreter)).toBeUndefined();
     });
 
     it('rejects a relative path', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}bin/hydrust`);
 
-        expect(await findHydrustInInterpreter(interpreter)).toBeUndefined();
+        expect(await lookUpPath(interpreter)).toBeUndefined();
     });
 
     it('rejects empty output', async () => {
         const interpreter = fakeInterpreter('true');
 
-        expect(await findHydrustInInterpreter(interpreter)).toBeUndefined();
+        expect(await lookUpPath(interpreter)).toBeUndefined();
     });
 
     it('treats a non-zero exit as not found, even with a path on stdout', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\necho "ModuleNotFoundError: No module named 'hydrust'" >&2\nexit 1`);
 
-        expect(await findHydrustInInterpreter(interpreter)).toBeUndefined();
+        const before = lookupDirs();
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
+        expect(lookupDirs()).toEqual(before);
     });
 
     it('gives up on an interpreter that does not answer in time', async () => {
@@ -131,7 +139,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
 
         const before = lookupDirs();
         const started = Date.now();
-        expect(await findHydrustInInterpreter(interpreter, 200)).toBeUndefined();
+        expect(await findHydrustInInterpreter(interpreter, 200)).toEqual({ kind: 'couldNotAsk' });
         expect(Date.now() - started).toBeLessThan(5000);
         expect(lookupDirs()).toEqual(before);
     });
@@ -139,7 +147,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
     it('runs in a private directory, so nothing else can be first on sys.path', async () => {
         const interpreter = fakeInterpreter(`echo "${BINARY_LINE_PREFIX}$(pwd)"`);
 
-        const answer = await findHydrustInInterpreter(interpreter);
+        const answer = await lookUpPath(interpreter);
 
         expect(answer).toBeDefined();
         expect(path.dirname(answer!)).toBe(fs.realpathSync(os.tmpdir()));
@@ -149,7 +157,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
     it('cleans up the directory it ran in', async () => {
         const interpreter = fakeInterpreter(`echo "${BINARY_LINE_PREFIX}$(pwd)"`);
 
-        const answer = await findHydrustInInterpreter(interpreter);
+        const answer = await lookUpPath(interpreter);
 
         expect(fs.existsSync(answer!)).toBe(false);
     });
@@ -160,13 +168,17 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
             `printf '${BINARY_LINE_PREFIX}/venv/pr' ; sleep 0.2 ; printf '\\303' ; sleep 0.2 ; printf '\\270ject/hydrust\\n'`
         );
 
-        expect(await findHydrustInInterpreter(interpreter)).toBe('/venv/prøject/hydrust');
+        expect(await lookUpPath(interpreter)).toBe('/venv/prøject/hydrust');
     });
 });
 
 describe('an interpreter that cannot be run', () => {
-    it('is treated as not found', async () => {
-        expect(await findHydrustInInterpreter(path.join(scratchDir, 'no-such-python'))).toBeUndefined();
+    it('is reported as one that could not be asked, not as an empty environment', async () => {
+        const before = lookupDirs();
+
+        expect(await findHydrustInInterpreter(path.join(scratchDir, 'no-such-python')))
+            .toEqual({ kind: 'couldNotAsk' });
+        expect(lookupDirs()).toEqual(before);
     });
 });
 
@@ -175,7 +187,7 @@ describe.skipIf(!python3)('the lookup script, run by a real python3', () => {
         const binary = path.join(scratchDir, 'bin', 'hydrust');
         installStandInPackage(`return ${JSON.stringify(binary)}`);
 
-        expect(await findHydrustInInterpreter(python3!)).toBe(binary);
+        expect(await lookUpPath(python3!)).toBe(binary);
     });
 
     it.skipIf(isWindows)('is not found when the hydrust package is not installed', async () => {
@@ -184,13 +196,13 @@ describe.skipIf(!python3)('the lookup script, run by a real python3', () => {
         delete process.env.PYTHONPATH;
         const interpreter = fakeInterpreter(`exec "${python3}" -S "$@"`);
 
-        expect(await findHydrustInInterpreter(interpreter)).toBeUndefined();
+        expect(await lookUpPath(interpreter)).toBeUndefined();
     });
 
     it('is not found when find_hydrust_bin() raises', async () => {
         installStandInPackage('raise FileNotFoundError("/venv/bin/hydrust")');
 
-        expect(await findHydrustInInterpreter(python3!)).toBeUndefined();
+        expect(await lookUpPath(python3!)).toBeUndefined();
     });
 
     it('is not found for a hydrust package without find_hydrust_bin()', async () => {
@@ -199,13 +211,13 @@ describe.skipIf(!python3)('the lookup script, run by a real python3', () => {
         fs.writeFileSync(path.join(site, 'hydrust', '__init__.py'), '');
         process.env.PYTHONPATH = site;
 
-        expect(await findHydrustInInterpreter(python3!)).toBeUndefined();
+        expect(await lookUpPath(python3!)).toBeUndefined();
     });
 
     it('keeps a non-ASCII path intact', async () => {
         const binary = path.join(scratchDir, 'prøject', 'bin', 'hydrust');
         installStandInPackage(`return ${JSON.stringify(binary)}`);
 
-        expect(await findHydrustInInterpreter(python3!)).toBe(binary);
+        expect(await lookUpPath(python3!)).toBe(binary);
     });
 });

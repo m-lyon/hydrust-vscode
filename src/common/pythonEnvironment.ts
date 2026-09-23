@@ -41,6 +41,20 @@ const OUTPUT_LIMIT = 4096;
 const LINE_LIMIT = 64 * 1024;
 
 /**
+ * What an interpreter had to say. `notInstalled` is a definitive answer from
+ * an interpreter that ran; `couldNotAsk` means it could not be asked at all
+ * (it could not be started, or did not answer in time), which says nothing
+ * about the environment and is worth asking again later.
+ */
+export type InterpreterLookup =
+    | { kind: 'found'; path: string }
+    | { kind: 'notInstalled' }
+    | { kind: 'couldNotAsk' };
+
+const NOT_INSTALLED: InterpreterLookup = { kind: 'notInstalled' };
+const COULD_NOT_ASK: InterpreterLookup = { kind: 'couldNotAsk' };
+
+/**
  * Find the `hydrust` binary installed in the environment of a Python
  * interpreter, such as one added with `uv add --dev hydrust` or
  * `pip install hydrust`.
@@ -50,18 +64,18 @@ const LINE_LIMIT = 64 * 1024;
  * PATH lookup misses it. The interpreter is asked instead, through the same
  * `find_hydrust_bin()` that `python -m hydrust` uses.
  *
- * Resolves to an absolute path, or undefined for any failure: the package is
- * not installed, the interpreter does not exist or does not answer in time, or
- * the answer is not an absolute path. None of these is an error, since most
- * environments will not have hydrust installed.
+ * Resolves to the absolute path it reports, to `notInstalled` when the
+ * interpreter ran but has no hydrust to point at, or to `couldNotAsk` when it
+ * could not be run at all. None of these is an error, since most environments
+ * will not have hydrust installed.
  *
  * `timeoutMs` only exists so the tests can make a hang happen quickly.
  */
 export function findHydrustInInterpreter(
     interpreter: string,
     timeoutMs: number = INTERPRETER_LOOKUP_TIMEOUT_MS
-): Promise<string | undefined> {
-    return new Promise((resolve) => {
+): Promise<InterpreterLookup> {
+    return new Promise<InterpreterLookup>((resolve) => {
         let settled = false;
         let stdout = '';
         let stderr = '';
@@ -70,7 +84,7 @@ export function findHydrustInInterpreter(
         /** Whatever of the current line has arrived so far. */
         let pending = '';
 
-        const finish = (value: string | undefined) => {
+        const finish = (value: InterpreterLookup) => {
             if (!settled) {
                 settled = true;
                 resolve(value);
@@ -87,7 +101,7 @@ export function findHydrustInInterpreter(
             workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-lookup-'));
         } catch (err) {
             logger.debug(`Could not make a directory to run ${interpreter} in: ${err}`);
-            resolve(undefined);
+            resolve(COULD_NOT_ASK);
             return;
         }
 
@@ -112,7 +126,7 @@ export function findHydrustInInterpreter(
         } catch (err) {
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
             cleanUp();
-            finish(undefined);
+            finish(COULD_NOT_ASK);
             return;
         }
 
@@ -127,7 +141,7 @@ export function findHydrustInInterpreter(
             child.stdout?.destroy();
             child.stderr?.destroy();
             cleanUp();
-            finish(undefined);
+            finish(COULD_NOT_ASK);
         }, timeoutMs);
 
         // setEncoding, not per-chunk toString: a multi-byte character split
@@ -161,7 +175,7 @@ export function findHydrustInInterpreter(
             clearTimeout(timer);
             cleanUp();
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
-            finish(undefined);
+            finish(COULD_NOT_ASK);
         });
         child.on('close', (code) => {
             clearTimeout(timer);
@@ -175,7 +189,7 @@ export function findHydrustInInterpreter(
                         stderr.trim().slice(-OUTPUT_LIMIT)
                     );
                 }
-                finish(undefined);
+                finish(NOT_INSTALLED);
                 return;
             }
             // A last line without a trailing newline is still an answer.
@@ -188,10 +202,10 @@ export function findHydrustInInterpreter(
                     `${interpreter} gave an unusable hydrust location: ` +
                     JSON.stringify(stdout.slice(-512))
                 );
-                finish(undefined);
+                finish(NOT_INSTALLED);
                 return;
             }
-            finish(binaryPath);
+            finish({ kind: 'found', path: binaryPath });
         });
     });
 }

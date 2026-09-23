@@ -60,7 +60,8 @@ vi.mock('which', () => ({
  * What each Python interpreter reports as its hydrust binary. An interpreter
  * that is not listed has no hydrust installed, which is every interpreter the
  * older tests use, so they resolve exactly as they did before the lookup
- * existed. An Error is thrown from the lookup.
+ * existed. An Error is thrown from the lookup, and 'couldNotAsk' stands for an
+ * interpreter that could not be run at all.
  */
 const pythonStub = vi.hoisted(() => ({
     binaries: {} as Record<string, string | Error>,
@@ -74,7 +75,10 @@ vi.mock('../../src/common/pythonEnvironment', () => ({
         if (answer instanceof Error) {
             throw answer;
         }
-        return answer;
+        if (answer === 'couldNotAsk') {
+            return { kind: 'couldNotAsk' };
+        }
+        return answer ? { kind: 'found', path: answer } : { kind: 'notInstalled' };
     },
 }));
 
@@ -635,6 +639,19 @@ describe('looking for a server in the selected Python environment', () => {
 
         expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
         expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
+    });
+
+    it('asks again when the interpreter could not be run at all', async () => {
+        pythonStub.binaries[INTERPRETER] = 'couldNotAsk';
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+
+        await start(settings);
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
     });
 
     it('falls back to PATH when the environment has no hydrust', async () => {

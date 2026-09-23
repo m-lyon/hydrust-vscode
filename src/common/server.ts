@@ -103,7 +103,9 @@ function recheckUnknownOnce(binaryPath: string): boolean {
 /**
  * Ask an interpreter where its hydrust is, or hand back what it said earlier.
  * A remembered path that has since gone (a reinstall, a deleted environment)
- * is worth asking about again; anything else stands for the session.
+ * is worth asking about again; anything else it answered stands for the
+ * session. An interpreter that could not be asked at all is not remembered,
+ * so a later start asks it again.
  */
 async function lookUpInterpreter(interpreter: string, probeTimeoutMs?: number): Promise<string | undefined> {
     if (interpreterBinaries.has(interpreter)) {
@@ -112,7 +114,11 @@ async function lookUpInterpreter(interpreter: string, probeTimeoutMs?: number): 
             return remembered;
         }
     }
-    const found = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
+    const lookup = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
+    if (lookup.kind === 'couldNotAsk') {
+        return undefined;
+    }
+    const found = lookup.kind === 'found' ? lookup.path : undefined;
     if (found && !(await fsapi.pathExists(found))) {
         logger.warn(`Ignoring ${found}: reported by ${interpreter} but not found on disk.`);
         interpreterBinaries.set(interpreter, undefined);
