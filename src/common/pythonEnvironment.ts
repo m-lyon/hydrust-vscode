@@ -40,6 +40,9 @@ const OUTPUT_LIMIT = 4096;
  */
 const LINE_LIMIT = 64 * 1024;
 
+/** Characters cmd.exe acts on that double quotes do not reliably contain. */
+const SHELL_UNSAFE = /["&|^<>%]/;
+
 /**
  * What an interpreter had to say. `notInstalled` is a definitive answer from
  * an interpreter that ran; `couldNotAsk` means it could not be asked at all
@@ -82,10 +85,27 @@ export function findHydrustInInterpreter(
         let settled = false;
         let stdout = '';
         let stderr = '';
-        /** The marked answer, kept as it arrives so later output cannot evict it. */
-        let markedLine: string | undefined;
+        /** The answered path, kept as it arrives so later output cannot evict it. */
+        let answer: string | undefined;
         /** Whatever of the current line has arrived so far. */
         let pending = '';
+
+        /**
+         * Take a marked line as the answer, if it carries a usable one. Only
+         * an absolute path is taken, so noise that happens to carry the marker
+         * (a `.bat` shim without `@echo off` echoes the command line, script
+         * and all) cannot claim the slot and defeat the real answer.
+         */
+        const noteMarked = (line: string) => {
+            const marker = line.indexOf(BINARY_LINE_PREFIX);
+            if (marker < 0) {
+                return;
+            }
+            const candidate = line.slice(marker + BINARY_LINE_PREFIX.length).trim();
+            if (path.isAbsolute(candidate)) {
+                answer ??= candidate;
+            }
+        };
 
         const finish = (value: InterpreterLookup) => {
             if (!settled) {
@@ -141,9 +161,19 @@ export function findHydrustInInterpreter(
         try {
             // Node refuses to spawn a .bat/.cmd directly, which is what a
             // pyenv-win shim is, so those go through the shell instead.
-            child = /\.(bat|cmd)$/i.test(interpreter)
-                ? spawn(`"${interpreter}" -c "${FIND_BINARY_SCRIPT}"`, { ...options, shell: true })
-                : spawn(interpreter, ['-c', FIND_BINARY_SCRIPT], options);
+            if (/\.(bat|cmd)$/i.test(interpreter)) {
+                if (SHELL_UNSAFE.test(interpreter)) {
+                    // Only naive quoting is possible here, so a path carrying
+                    // any of these could escape into command position.
+                    logger.debug(`Not running ${interpreter} through a shell: its path is not safely quotable.`);
+                    cleanUp();
+                    finish(COULD_NOT_ASK);
+                    return;
+                }
+                child = spawn(`"${interpreter}" -c "${FIND_BINARY_SCRIPT}"`, { ...options, shell: true });
+            } else {
+                child = spawn(interpreter, ['-c', FIND_BINARY_SCRIPT], options);
+            }
         } catch (err) {
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
             cleanUp();
@@ -185,12 +215,7 @@ export function findHydrustInInterpreter(
             for (const line of lines) {
                 // Anywhere in the line, not just at its start: output written
                 // without a trailing newline runs straight into the answer.
-                const marker = line.indexOf(BINARY_LINE_PREFIX);
-                if (marker >= 0) {
-                    // The first marked line is the answer; the script prints it
-                    // last, so anything marked after it is shutdown noise.
-                    markedLine ??= line.slice(marker).trim();
-                }
+                noteMarked(line);
             }
         });
         child.stderr?.on('data', (chunk: string) => {
@@ -236,12 +261,9 @@ export function findHydrustInInterpreter(
                 return;
             }
             // A last line without a trailing newline is still an answer.
-            const marker = pending.indexOf(BINARY_LINE_PREFIX);
-            if (marker >= 0) {
-                markedLine ??= pending.slice(marker).trim();
-            }
-            const binaryPath = markedLine?.slice(BINARY_LINE_PREFIX.length).trim();
-            if (!binaryPath || !path.isAbsolute(binaryPath)) {
+            noteMarked(pending);
+            const binaryPath = answer;
+            if (!binaryPath) {
                 logger.debug(
                     `${interpreter} gave an unusable hydrust location: ` +
                     JSON.stringify(stdout.slice(-512))

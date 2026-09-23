@@ -215,6 +215,24 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
+    it('refuses a shell branch for a path that cannot be safely quoted', async () => {
+        const interpreter = fakeInterpreter(
+            `echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust`,
+            'py" & echo pwned & rem .cmd'
+        );
+
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'couldNotAsk' });
+    });
+
+    it('ignores marker-carrying noise printed before the answer', async () => {
+        // A shim without `@echo off` echoes the command line, script and all.
+        const interpreter = fakeInterpreter(
+            `echo "C:\\py.exe -c print('${BINARY_LINE_PREFIX}' + x)"\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`
+        );
+
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
+    });
+
     it('keeps a multi-byte character split across chunks intact', async () => {
         // Printed a byte at a time, so the two-byte 'ø' straddles a chunk boundary.
         const interpreter = fakeInterpreter(
