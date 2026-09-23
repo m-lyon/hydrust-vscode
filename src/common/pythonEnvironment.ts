@@ -111,6 +111,10 @@ export function findHydrustInInterpreter(
                 'Looking on PATH instead.'
             );
             child.kill('SIGKILL');
+            // A shim that forked the real interpreter leaves a grandchild
+            // holding these pipes open, so release them now.
+            child.stdout?.destroy();
+            child.stderr?.destroy();
             cleanUp();
             finish(undefined);
         }, timeoutMs);
@@ -120,9 +124,10 @@ export function findHydrustInInterpreter(
         child.stdout?.setEncoding('utf8');
         child.stderr?.setEncoding('utf8');
         child.stdout?.on('data', (chunk: string) => {
-            if (stdout.length < OUTPUT_LIMIT) {
-                stdout += chunk;
-            }
+            // Keep the tail, not the head: a noisy prologue must not push the
+            // answer out, and a line cut short at the front no longer carries
+            // the marker, so it cannot be mistaken for a complete path.
+            stdout = (stdout + chunk).slice(-OUTPUT_LIMIT);
         });
         child.stderr?.on('data', (chunk: string) => {
             if (stderr.length < OUTPUT_LIMIT) {

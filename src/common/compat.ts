@@ -110,6 +110,8 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
                 'and the version treated as unknown.'
             );
             child.kill('SIGKILL');
+            child.stdout?.destroy();
+            child.stderr?.destroy();
             finish(undefined);
         }, timeoutMs);
 

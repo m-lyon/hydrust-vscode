@@ -72,7 +72,9 @@ The extension looks for the `hydrust` server in this order:
 
 The Python environment wins over `PATH` even when the copy on `PATH` is newer,
 so the editor runs the same version as `hydrust check` in that environment.
-The interpreter used is the one described below.
+The lookup uses the interpreter from `hydrust.pythonInterpreterPath`, or the
+Python extension's active interpreter. The remaining fallbacks listed below are
+applied by the server itself, so no environment lookup happens for them.
 
 ## Python Environment Detection
 
