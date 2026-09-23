@@ -60,8 +60,8 @@ vi.mock('which', () => ({
  * What each Python interpreter reports as its hydrust binary. An interpreter
  * that is not listed has no hydrust installed, which is every interpreter the
  * older tests use, so they resolve exactly as they did before the lookup
- * existed. An Error is thrown from the lookup, and 'couldNotAsk' stands for an
- * interpreter that could not be run at all.
+ * existed. An Error is thrown from the lookup, 'couldNotAsk' stands for an
+ * interpreter that could not be run at all, and 'timedOut' for one that hung.
  */
 const pythonStub = vi.hoisted(() => ({
     binaries: {} as Record<string, string | Error>,
@@ -77,6 +77,9 @@ vi.mock('../../src/common/pythonEnvironment', () => ({
         }
         if (answer === 'couldNotAsk') {
             return { kind: 'couldNotAsk' };
+        }
+        if (answer === 'timedOut') {
+            return { kind: 'couldNotAsk', timedOut: true };
         }
         return answer ? { kind: 'found', path: answer } : { kind: 'notInstalled' };
     },
@@ -654,6 +657,22 @@ describe('looking for a server in the selected Python environment', () => {
         await start(settings);
 
         expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('does not ask again for an interpreter that hung, so the stall is paid once', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        pythonStub.binaries[INTERPRETER] = 'timedOut';
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+
+        await start(settings);
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER]);
         expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
     });
 

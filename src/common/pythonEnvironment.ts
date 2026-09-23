@@ -50,10 +50,12 @@ const LINE_LIMIT = 64 * 1024;
 export type InterpreterLookup =
     | { kind: 'found'; path: string }
     | { kind: 'notInstalled' }
-    | { kind: 'couldNotAsk' };
+    | { kind: 'couldNotAsk'; timedOut?: boolean };
 
 const NOT_INSTALLED: InterpreterLookup = { kind: 'notInstalled' };
 const COULD_NOT_ASK: InterpreterLookup = { kind: 'couldNotAsk' };
+/** An interpreter that hung. Told apart so the caller need not stall on it again. */
+const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
 
 /**
  * Find the `hydrust` binary installed in the environment of a Python
@@ -117,10 +119,15 @@ export function findHydrustInInterpreter(
         // The answer must come from the selected environment alone, so the
         // inherited import settings are dropped: PYTHONPATH is searched ahead
         // of the environment's own site-packages, so a shell that exported it
-        // could otherwise make another checkout's hydrust answer.
-        const env: NodeJS.ProcessEnv = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONSAFEPATH: '1' };
-        delete env.PYTHONPATH;
-        delete env.PYTHONHOME;
+        // could otherwise make another checkout's hydrust answer. Windows
+        // environment names are case-insensitive, so `Pythonpath` counts too
+        // and the keys have to be compared without their case.
+        const dropped = ['pythonpath', 'pythonhome'];
+        const env: NodeJS.ProcessEnv = Object.fromEntries(
+            Object.entries(process.env).filter(([name]) => !dropped.includes(name.toLowerCase()))
+        );
+        env.PYTHONIOENCODING = 'utf-8';
+        env.PYTHONSAFEPATH = '1';
         const options = {
             cwd: workingDir,
             // A path is printed, so make sure a non-ASCII one survives a
@@ -155,7 +162,7 @@ export function findHydrustInInterpreter(
             child.stdout?.destroy();
             child.stderr?.destroy();
             cleanUp();
-            finish(COULD_NOT_ASK);
+            finish(TIMED_OUT);
         }, timeoutMs);
 
         // setEncoding, not per-chunk toString: a multi-byte character split
@@ -176,10 +183,13 @@ export function findHydrustInInterpreter(
                 pending = '';
             }
             for (const line of lines) {
-                if (line.trim().startsWith(BINARY_LINE_PREFIX)) {
+                // Anywhere in the line, not just at its start: output written
+                // without a trailing newline runs straight into the answer.
+                const marker = line.indexOf(BINARY_LINE_PREFIX);
+                if (marker >= 0) {
                     // The first marked line is the answer; the script prints it
                     // last, so anything marked after it is shutdown noise.
-                    markedLine ??= line.trim();
+                    markedLine ??= line.slice(marker).trim();
                 }
             }
         });
@@ -226,8 +236,9 @@ export function findHydrustInInterpreter(
                 return;
             }
             // A last line without a trailing newline is still an answer.
-            if (pending.trim().startsWith(BINARY_LINE_PREFIX)) {
-                markedLine ??= pending.trim();
+            const marker = pending.indexOf(BINARY_LINE_PREFIX);
+            if (marker >= 0) {
+                markedLine ??= pending.slice(marker).trim();
             }
             const binaryPath = markedLine?.slice(BINARY_LINE_PREFIX.length).trim();
             if (!binaryPath || !path.isAbsolute(binaryPath)) {

@@ -36,8 +36,8 @@ afterEach(() => {
 });
 
 /** Write an executable shell script to stand in for a Python interpreter. */
-function fakeInterpreter(body: string): string {
-    const interpreter = path.join(scratchDir, 'python');
+function fakeInterpreter(body: string, name: string = 'python'): string {
+    const interpreter = path.join(scratchDir, name);
     fs.writeFileSync(interpreter, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
     return interpreter;
 }
@@ -173,7 +173,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
 
         const before = lookupDirs();
         const started = Date.now();
-        expect(await findHydrustInInterpreter(interpreter, 200)).toEqual({ kind: 'couldNotAsk' });
+        expect(await findHydrustInInterpreter(interpreter, 200)).toEqual({ kind: 'couldNotAsk', timedOut: true });
         expect(Date.now() - started).toBeLessThan(5000);
         expect(lookupDirs()).toEqual(before);
     });
@@ -194,6 +194,25 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         const answer = await lookUpPath(interpreter);
 
         expect(fs.existsSync(answer!)).toBe(false);
+    });
+
+    it('finds the answer when something without a newline runs into it', async () => {
+        const interpreter = fakeInterpreter(`printf 'progress...'\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`);
+
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
+    });
+
+    it('runs a .cmd shim through a shell with the script intact', async () => {
+        // The branch is picked by the filename, not the platform, so a POSIX
+        // shell can pin down that the embedded script survives quoting.
+        const interpreter = fakeInterpreter(
+            `[ "$#" -eq 2 ] || exit 1\n[ "$1" = "-c" ] || exit 1\n`
+            + `case "$2" in *find_hydrust_bin*) ;; *) exit 1 ;; esac\n`
+            + `echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust`,
+            'python.cmd'
+        );
+
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
     it('keeps a multi-byte character split across chunks intact', async () => {

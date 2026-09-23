@@ -105,7 +105,8 @@ function recheckUnknownOnce(binaryPath: string): boolean {
  * A remembered path that has since gone (a reinstall, a deleted environment)
  * is worth asking about again; anything else it answered stands for the
  * session. An interpreter that could not be asked at all is not remembered,
- * so a later start asks it again.
+ * so a later start asks it again, except one that hung: every start would
+ * otherwise stall for the whole lookup timeout before falling back to PATH.
  */
 async function lookUpInterpreter(interpreter: string, probeTimeoutMs?: number): Promise<string | undefined> {
     if (interpreterBinaries.has(interpreter)) {
@@ -116,6 +117,9 @@ async function lookUpInterpreter(interpreter: string, probeTimeoutMs?: number): 
     }
     const lookup = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
     if (lookup.kind === 'couldNotAsk') {
+        if (lookup.timedOut) {
+            interpreterBinaries.set(interpreter, undefined);
+        }
         return undefined;
     }
     const found = lookup.kind === 'found' ? lookup.path : undefined;
