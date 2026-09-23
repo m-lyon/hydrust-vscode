@@ -147,9 +147,8 @@ export function findHydrustInInterpreter(
             }
         });
         child.stderr?.on('data', (chunk: string) => {
-            if (stderr.length < OUTPUT_LIMIT) {
-                stderr += chunk;
-            }
+            // Keep the tail: the useful part of a traceback is at the end.
+            stderr = (stderr + chunk).slice(-OUTPUT_LIMIT);
         });
         child.on('error', (err) => {
             clearTimeout(timer);

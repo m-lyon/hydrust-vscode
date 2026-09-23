@@ -113,6 +113,11 @@ async function lookUpInterpreter(interpreter: string, probeTimeoutMs?: number): 
         }
     }
     const found = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
+    if (found && !(await fsapi.pathExists(found))) {
+        logger.warn(`Ignoring ${found}: reported by ${interpreter} but not found on disk.`);
+        interpreterBinaries.set(interpreter, undefined);
+        return undefined;
+    }
     interpreterBinaries.set(interpreter, found);
     return found;
 }
@@ -134,10 +139,6 @@ async function findInPythonEnvironment(
 ): Promise<ResolvedBinary | undefined> {
     const binaryPath = await lookUpInterpreter(interpreter, probeTimeoutMs);
     if (!binaryPath) {
-        return undefined;
-    }
-    if (!(await fsapi.pathExists(binaryPath))) {
-        logger.warn(`Ignoring ${binaryPath}: reported by ${interpreter} but not found on disk.`);
         return undefined;
     }
     const version = await probeBinaryVersion(binaryPath, context, probeTimeoutMs, recheckUnknownOnce(binaryPath));
