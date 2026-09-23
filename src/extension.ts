@@ -44,10 +44,11 @@ function loadServerDefaults(): ServerInfo {
  * Extension activation
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    // Both outlive a single activation, so start from a clean slate in case the
+    // These outlive a single activation, so start from a clean slate in case the
     // extension is activated again without the module being reloaded.
     deactivating = false;
     pendingRun = undefined;
+    forgetInterpreterLookups();
 
     const serverInfo = loadServerDefaults();
     const serverName = serverInfo.name;
