@@ -76,6 +76,11 @@ The lookup uses the interpreter from `hydrust.pythonInterpreterPath`, or the
 Python extension's active interpreter. The remaining fallbacks listed below are
 applied by the server itself, so no environment lookup happens for them.
 
+Each interpreter is asked only once per session, since starting one is slow.
+After installing `hydrust` into an environment that has already been used, run
+**Hydrust: Restart Server** from the command palette to have it asked again;
+other restarts, such as a settings change, reuse the earlier answer.
+
 ## Python Environment Detection
 
 Hydrust automatically detects your Python environment using the following priority:

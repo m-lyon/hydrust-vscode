@@ -56,6 +56,11 @@ function installStandInPackage(findBody: string): void {
     process.env.PYTHONPATH = site;
 }
 
+/** The working directories lookups make, so a test can tell one was left behind. */
+function lookupDirs(): string[] {
+    return fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith('hydrust-lookup-')).sort();
+}
+
 describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
     it('returns the path it prints', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust`);
@@ -112,9 +117,11 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
     it('gives up on an interpreter that does not answer in time', async () => {
         const interpreter = fakeInterpreter(`sleep 10\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`);
 
+        const before = lookupDirs();
         const started = Date.now();
         expect(await findHydrustInInterpreter(interpreter, 200)).toBeUndefined();
         expect(Date.now() - started).toBeLessThan(5000);
+        expect(lookupDirs()).toEqual(before);
     });
 
     it('runs in a private directory, so nothing else can be first on sys.path', async () => {
