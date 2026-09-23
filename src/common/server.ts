@@ -91,13 +91,16 @@ function recheckUnknownOnce(binaryPath: string): boolean {
  * usable server, so the caller can carry on to PATH: in particular for every
  * environment without the `hydrust` package, which includes every server before
  * v0.5.0, since none was published to PyPI.
+ *
+ * `probeTimeoutMs` covers both the interpreter lookup and the `--version`
+ * probe, and only exists so the tests can make a hang happen quickly.
  */
 async function findInPythonEnvironment(
     interpreter: string,
     context: vscode.ExtensionContext,
     probeTimeoutMs?: number
 ): Promise<ResolvedBinary | undefined> {
-    const binaryPath = await findHydrustInInterpreter(interpreter);
+    const binaryPath = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
     if (!binaryPath) {
         return undefined;
     }

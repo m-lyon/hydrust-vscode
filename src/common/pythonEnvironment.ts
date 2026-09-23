@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { logger } from './logger';
@@ -23,11 +24,14 @@ export const INTERPRETER_LOOKUP_TIMEOUT_MS = 5000;
 const FIND_BINARY_SCRIPT = [
     'import os',
     'from hydrust import find_hydrust_bin',
-    'print(os.fsdecode(find_hydrust_bin()))',
+    'print("HYDRUST_BIN:" + os.fsdecode(find_hydrust_bin()))',
 ].join('\n');
 
-/** Cap on how much stderr is kept for the log, so a noisy interpreter cannot grow it unbounded. */
-const STDERR_LIMIT = 4096;
+/** Marks the answer, so output from anything else in the interpreter cannot be mistaken for it. */
+export const BINARY_LINE_PREFIX = 'HYDRUST_BIN:';
+
+/** Cap on how much output is kept, so a noisy interpreter cannot grow it unbounded. */
+const OUTPUT_LIMIT = 4096;
 
 /**
  * Find the `hydrust` binary installed in the environment of a Python
@@ -62,21 +66,41 @@ export function findHydrustInInterpreter(
             }
         };
 
+        // `-c` puts the working directory first on sys.path, so run
+        // somewhere nobody else can write: neither the workspace, where a
+        // folder named `hydrust` would be imported instead of the installed
+        // package, nor the shared /tmp, where any local user could plant one.
+        // PYTHONSAFEPATH (3.11+) drops that entry altogether.
+        let workingDir: string;
+        try {
+            workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-lookup-'));
+        } catch (err) {
+            logger.debug(`Could not make a directory to run ${interpreter} in: ${err}`);
+            resolve(undefined);
+            return;
+        }
+
+        const cleanUp = () => {
+            try {
+                fs.rmSync(workingDir, { recursive: true, force: true });
+            } catch {
+                // Nothing useful to do; it is an empty directory in the temp dir.
+            }
+        };
+
         let child;
         try {
             child = spawn(interpreter, ['-c', FIND_BINARY_SCRIPT], {
-                // Not the workspace: `-c` puts the working directory first on
-                // sys.path, so a folder named `hydrust` in the project would be
-                // imported instead of the installed package.
-                cwd: os.tmpdir(),
+                cwd: workingDir,
                 // A path is printed, so make sure a non-ASCII one survives a
                 // non-UTF-8 console encoding on Windows.
-                env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+                env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONSAFEPATH: '1' },
                 stdio: ['ignore', 'pipe', 'pipe'],
                 windowsHide: true,
             });
         } catch (err) {
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
+            cleanUp();
             finish(undefined);
             return;
         }
@@ -87,42 +111,57 @@ export function findHydrustInInterpreter(
                 'Looking on PATH instead.'
             );
             child.kill('SIGKILL');
+            cleanUp();
             finish(undefined);
         }, timeoutMs);
 
-        child.stdout?.on('data', (chunk: Buffer) => {
-            stdout += chunk.toString('utf8');
+        // setEncoding, not per-chunk toString: a multi-byte character split
+        // across a chunk boundary must not decode to replacement characters.
+        child.stdout?.setEncoding('utf8');
+        child.stderr?.setEncoding('utf8');
+        child.stdout?.on('data', (chunk: string) => {
+            if (stdout.length < OUTPUT_LIMIT) {
+                stdout += chunk;
+            }
         });
-        child.stderr?.on('data', (chunk: Buffer) => {
-            if (stderr.length < STDERR_LIMIT) {
-                stderr += chunk.toString('utf8');
+        child.stderr?.on('data', (chunk: string) => {
+            if (stderr.length < OUTPUT_LIMIT) {
+                stderr += chunk;
             }
         });
         child.on('error', (err) => {
             clearTimeout(timer);
+            cleanUp();
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
             finish(undefined);
         });
         child.on('close', (code) => {
             clearTimeout(timer);
+            cleanUp();
             if (code !== 0) {
                 if (/No module named '?hydrust'?/.test(stderr)) {
                     logger.debug(`hydrust is not installed in the environment of ${interpreter}.`);
                 } else {
                     logger.debug(
                         `${interpreter} could not locate a hydrust binary (exit code ${code}): ` +
-                        stderr.trim().slice(-STDERR_LIMIT)
+                        stderr.trim().slice(-OUTPUT_LIMIT)
                     );
                 }
                 finish(undefined);
                 return;
             }
-            // The last line only: a sitecustomize or .pth file may print
-            // something of its own first.
-            const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-            const binaryPath = lines[lines.length - 1];
+            // Only the marked line: a sitecustomize, .pth file or atexit hook
+            // may print something of its own before or after the answer.
+            const marked = stdout
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter((line) => line.startsWith(BINARY_LINE_PREFIX));
+            const binaryPath = marked[marked.length - 1]?.slice(BINARY_LINE_PREFIX.length).trim();
             if (!binaryPath || !path.isAbsolute(binaryPath)) {
-                logger.debug(`${interpreter} gave an unusable hydrust location: ${JSON.stringify(stdout)}`);
+                logger.debug(
+                    `${interpreter} gave an unusable hydrust location: ` +
+                    JSON.stringify(stdout.slice(0, 512))
+                );
                 finish(undefined);
                 return;
             }
