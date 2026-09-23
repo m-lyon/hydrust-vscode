@@ -203,8 +203,9 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
     });
 
     it('runs a .cmd shim through a shell with the script intact', async () => {
-        // The branch is picked by the filename, not the platform, so a POSIX
-        // shell can pin down that the embedded script survives quoting.
+        // The shell branch is only taken on Windows, so the platform is
+        // injected; the POSIX shell then pins down that the embedded script
+        // survives quoting.
         const interpreter = fakeInterpreter(
             `[ "$#" -eq 2 ] || exit 1\n[ "$1" = "-c" ] || exit 1\n`
             + `case "$2" in *find_hydrust_bin*) ;; *) exit 1 ;; esac\n`
@@ -212,7 +213,9 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
             'python.cmd'
         );
 
-        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
+        const answer = await findHydrustInInterpreter(interpreter, undefined, 'win32');
+
+        expect(answer).toEqual({ kind: 'found', path: '/venv/bin/hydrust' });
     });
 
     it('refuses a shell branch for a path that cannot be safely quoted', async () => {
@@ -221,7 +224,28 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
             'py" & echo pwned & rem .cmd'
         );
 
-        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'couldNotAsk' });
+        expect(await findHydrustInInterpreter(interpreter, undefined, 'win32'))
+            .toEqual({ kind: 'couldNotAsk' });
+    });
+
+    it('does not run a .cmd through a shell off Windows, where sh would expand it', async () => {
+        // `$(...)` is inert to cmd.exe but not to sh. Off Windows the shell is
+        // not used at all, so the name is run literally rather than expanded.
+        const interpreter = fakeInterpreter(
+            `echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust`,
+            'py$(echo pwned).cmd'
+        );
+
+        expect(await findHydrustInInterpreter(interpreter, undefined, 'linux'))
+            .toEqual({ kind: 'found', path: '/venv/bin/hydrust' });
+    });
+
+    it('finds the answer when marker-carrying noise runs into it without a newline', async () => {
+        const interpreter = fakeInterpreter(
+            `printf "${BINARY_LINE_PREFIX} not a path "\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`
+        );
+
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
     it('ignores marker-carrying noise printed before the answer', async () => {

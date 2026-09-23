@@ -75,11 +75,13 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
  * could not be run at all. None of these is an error, since most environments
  * will not have hydrust installed.
  *
- * `timeoutMs` only exists so the tests can make a hang happen quickly.
+ * `timeoutMs` only exists so the tests can make a hang happen quickly, and
+ * `platform` so they can exercise the Windows-only shell branch.
  */
 export function findHydrustInInterpreter(
     interpreter: string,
-    timeoutMs: number = INTERPRETER_LOOKUP_TIMEOUT_MS
+    timeoutMs: number = INTERPRETER_LOOKUP_TIMEOUT_MS,
+    platform: NodeJS.Platform = process.platform
 ): Promise<InterpreterLookup> {
     return new Promise<InterpreterLookup>((resolve) => {
         let settled = false;
@@ -97,13 +99,18 @@ export function findHydrustInInterpreter(
          * and all) cannot claim the slot and defeat the real answer.
          */
         const noteMarked = (line: string) => {
-            const marker = line.indexOf(BINARY_LINE_PREFIX);
-            if (marker < 0) {
-                return;
-            }
-            const candidate = line.slice(marker + BINARY_LINE_PREFIX.length).trim();
-            if (path.isAbsolute(candidate)) {
-                answer ??= candidate;
+            // Every occurrence, not just the first: marker-carrying noise can
+            // run into the real answer on the same line.
+            for (
+                let marker = line.indexOf(BINARY_LINE_PREFIX);
+                marker >= 0;
+                marker = line.indexOf(BINARY_LINE_PREFIX, marker + BINARY_LINE_PREFIX.length)
+            ) {
+                const candidate = line.slice(marker + BINARY_LINE_PREFIX.length).trim();
+                if (path.isAbsolute(candidate)) {
+                    answer ??= candidate;
+                    return;
+                }
             }
         };
 
@@ -160,8 +167,10 @@ export function findHydrustInInterpreter(
         let child;
         try {
             // Node refuses to spawn a .bat/.cmd directly, which is what a
-            // pyenv-win shim is, so those go through the shell instead.
-            if (/\.(bat|cmd)$/i.test(interpreter)) {
+            // pyenv-win shim is, so those go through the shell instead. Only
+            // on Windows: elsewhere the shell is `sh`, which expands more than
+            // the naive quoting below can contain, and nothing needs it.
+            if (platform === 'win32' && /\.(bat|cmd)$/i.test(interpreter)) {
                 if (SHELL_UNSAFE.test(interpreter)) {
                     // Only naive quoting is possible here, so a path carrying
                     // any of these could escape into command position.
@@ -208,8 +217,9 @@ export function findHydrustInInterpreter(
             pending = lines.pop() ?? '';
             if (pending.length > LINE_LIMIT) {
                 // An absurdly long line is not the answer; drop it rather than
-                // let it grow unbounded. What follows no longer starts with
-                // the marker, so it cannot be mistaken for one.
+                // let it grow unbounded. A marker arriving later in the same
+                // line is still read, which is no worse than one that arrived
+                // intact.
                 pending = '';
             }
             for (const line of lines) {
