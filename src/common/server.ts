@@ -37,6 +37,21 @@ const recheckedUnknown = new Set<string>();
 const warnedServerPaths = new Set<string>();
 
 /**
+ * What each Python interpreter last reported as its hydrust, including the
+ * common answer of nothing at all. Starting an interpreter is slow, and a
+ * restart happens for every settings change and every interpreter change, so
+ * the answer is remembered for the session; `forgetInterpreterLookups` drops
+ * it when the user asks for a restart, which is what they do after installing
+ * hydrust into the environment.
+ */
+const interpreterBinaries = new Map<string, string | undefined>();
+
+/** Forget what the interpreters reported, so the next start asks them again. */
+export function forgetInterpreterLookups(): void {
+    interpreterBinaries.clear();
+}
+
+/**
  * A running server, together with what the extension knows about what it
  * supports.
  */
@@ -86,6 +101,23 @@ function recheckUnknownOnce(binaryPath: string): boolean {
 }
 
 /**
+ * Ask an interpreter where its hydrust is, or hand back what it said earlier.
+ * A remembered path that has since gone (a reinstall, a deleted environment)
+ * is worth asking about again; anything else stands for the session.
+ */
+async function lookUpInterpreter(interpreter: string, probeTimeoutMs?: number): Promise<string | undefined> {
+    if (interpreterBinaries.has(interpreter)) {
+        const remembered = interpreterBinaries.get(interpreter);
+        if (!remembered || await fsapi.pathExists(remembered)) {
+            return remembered;
+        }
+    }
+    const found = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
+    interpreterBinaries.set(interpreter, found);
+    return found;
+}
+
+/**
  * Look for a hydrust installed in the selected Python environment, for example
  * by `uv add --dev hydrust`. Resolves to undefined whenever that does not give a
  * usable server, so the caller can carry on to PATH: in particular for every
@@ -100,7 +132,7 @@ async function findInPythonEnvironment(
     context: vscode.ExtensionContext,
     probeTimeoutMs?: number
 ): Promise<ResolvedBinary | undefined> {
-    const binaryPath = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
+    const binaryPath = await lookUpInterpreter(interpreter, probeTimeoutMs);
     if (!binaryPath) {
         return undefined;
     }

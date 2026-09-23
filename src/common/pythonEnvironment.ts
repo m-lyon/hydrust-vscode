@@ -13,6 +13,9 @@ import { logger } from './logger';
  */
 export const INTERPRETER_LOOKUP_TIMEOUT_MS = 5000;
 
+/** Marks the answer, so output from anything else in the interpreter cannot be mistaken for it. */
+export const BINARY_LINE_PREFIX = 'HYDRUST_BIN:';
+
 /**
  * Asks the `hydrust` Python package where it installed its binary.
  *
@@ -24,11 +27,8 @@ export const INTERPRETER_LOOKUP_TIMEOUT_MS = 5000;
 const FIND_BINARY_SCRIPT = [
     'import os',
     'from hydrust import find_hydrust_bin',
-    'print("HYDRUST_BIN:" + os.fsdecode(find_hydrust_bin()))',
+    `print(${JSON.stringify(BINARY_LINE_PREFIX)} + os.fsdecode(find_hydrust_bin()))`,
 ].join('\n');
-
-/** Marks the answer, so output from anything else in the interpreter cannot be mistaken for it. */
-export const BINARY_LINE_PREFIX = 'HYDRUST_BIN:';
 
 /** Cap on how much output is kept, so a noisy interpreter cannot grow it unbounded. */
 const OUTPUT_LIMIT = 4096;

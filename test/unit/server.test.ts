@@ -133,7 +133,7 @@ vi.mock('vscode-languageclient/node', () => {
     return { LanguageClient, State: { Stopped: 1, Starting: 3, Running: 2 } };
 });
 
-import { startServer } from '../../src/common/server';
+import { forgetInterpreterLookups, startServer } from '../../src/common/server';
 import { PROBE_CACHE_KEY } from '../../src/common/compat';
 import { getVersionedDir } from '../../src/common/constants';
 import { versionLastUsedKey } from '../../src/common/download';
@@ -234,6 +234,7 @@ beforeEach(() => {
     whichStub.paths = {};
     pythonStub.binaries = {};
     pythonStub.lookups = [];
+    forgetInterpreterLookups();
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
     outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
@@ -569,6 +570,53 @@ describe('looking for a server in the selected Python environment', () => {
         expect(pythonStub.lookups).toEqual([INTERPRETER]);
         expect(clientStub.clients[0].serverOptions.run.command).toBe(fromEnv);
         expect(started.compat).toBeDefined();
+    });
+
+    it('asks the interpreter once, not on every restart', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const fromEnv = environmentHydrust();
+        rememberVersion(fromEnv, 'v0.5.0');
+        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+
+        await start(settings);
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
+    });
+
+    it('asks again when a remembered binary has gone', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const fromEnv = environmentHydrust();
+        rememberVersion(fromEnv, 'v0.5.0');
+        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+
+        await start(settings);
+        fs.rmSync(fromEnv);
+        delete pythonStub.binaries[INTERPRETER];
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('does not ask again for an interpreter with no hydrust', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+
+        await start(settings);
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER]);
     });
 
     it('falls back to PATH when the environment has no hydrust', async () => {
