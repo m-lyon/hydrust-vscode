@@ -66,11 +66,12 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
 /**
  * Stop a hung lookup, and everything it started.
  *
- * On Windows a `.bat`/`.cmd` shim runs through cmd.exe, so the child is the
- * shell and the interpreter it forked is a grandchild that would survive a
- * kill of the shell alone, holding the lookup's working directory open for the
- * rest of the session. taskkill takes the whole tree; elsewhere the child is
- * the interpreter itself.
+ * A shim (a Windows `.bat`/`.cmd` run through cmd.exe, or a conda/poetry-style
+ * wrapper script that forks rather than execs) makes the real interpreter a
+ * grandchild that would survive a kill of the shim alone, holding the lookup's
+ * working directory and stdio open for the rest of the session. taskkill takes
+ * the whole tree on Windows; elsewhere the child leads its own process group
+ * (see `detached` below), so the group is signalled instead.
  */
 function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
     if (platform === 'win32' && child.pid !== undefined) {
@@ -87,6 +88,15 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
             return;
         } catch {
             // Fall through to killing the child on its own.
+        }
+    } else if (child.pid !== undefined) {
+        try {
+            // Negative pid: the whole group the detached child leads.
+            process.kill(-child.pid, 'SIGKILL');
+            return;
+        } catch {
+            // Already gone, or not permitted to signal the group: the direct
+            // child is still worth killing.
         }
     }
     child.kill('SIGKILL');
@@ -197,6 +207,10 @@ export async function findHydrustInInterpreter(
             env,
             stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
+            // Lead a process group, so a hung shim can be killed along with
+            // the interpreter it forked. Not on Windows, where the tree is
+            // taken by taskkill instead.
+            detached: platform !== 'win32',
         };
 
         let child;
