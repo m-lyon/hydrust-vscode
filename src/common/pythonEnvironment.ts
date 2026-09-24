@@ -172,6 +172,18 @@ export async function findHydrustInInterpreter(
         /** Set by a traceback naming the lookup itself, so hydrust is there but broken. */
         let brokenLookup = false;
 
+        /**
+         * Log without letting a disposed channel, which throws, skip the
+         * settle path that follows the line.
+         */
+        const logSafe = (level: 'debug' | 'warn', message: string) => {
+            try {
+                logger[level](message);
+            } catch {
+                // Losing the line must not leave the lookup unsettled.
+            }
+        };
+
         /** Latch what a line of stderr says, before later output can evict it. */
         const classify = (line: string) => {
             if (/No module named '?hydrust'?(?![\w.])/.test(line)) {
@@ -227,12 +239,7 @@ export async function findHydrustInInterpreter(
                 // Nothing useful to do if it fails; it is an empty directory
                 // in the temp dir, but a leak should be diagnosable.
                 .catch((err) => {
-                    try {
-                        logger.debug(`Could not remove ${workingDir}: ${err}`);
-                    } catch {
-                        // A disposed log channel throws; losing the line must
-                        // not leave the lookup unsettled.
-                    }
+                    logSafe('debug', `Could not remove ${workingDir}: ${err}`);
                 })
                 .then(() => resolve(value));
         };
@@ -295,7 +302,8 @@ export async function findHydrustInInterpreter(
         let graceTimer: NodeJS.Timeout | undefined;
         const timer = setTimeout(() => {
             timedOut = true;
-            logger.warn(
+            logSafe(
+                'warn',
                 `${interpreter} did not answer within ${timeoutMs}ms when asked where hydrust is installed. ` +
                 'Looking on PATH instead.'
             );
@@ -378,7 +386,7 @@ export async function findHydrustInInterpreter(
                 finish(timedOutResult());
                 return;
             }
-            logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
+            logSafe('debug', `Could not run ${interpreter} to look for hydrust: ${err}`);
             finish(COULD_NOT_ASK);
         });
         child.on('close', (code, signal) => {
@@ -392,21 +400,24 @@ export async function findHydrustInInterpreter(
                 return;
             }
             if (code === null && signal) {
-                // Killed rather than answered, so the environment is still unknown.
-                logger.debug(`${interpreter} was killed by ${signal} when asked where hydrust is installed.`);
-                finish(COULD_NOT_ASK);
+                logSafe('debug', `${interpreter} was killed by ${signal} when asked where hydrust is installed.`);
+                // An answer already read is still an answer: the interpreter
+                // may have printed it and only then died during teardown.
+                noteMarked(pending);
+                finish(answer ? { kind: 'found', path: answer } : COULD_NOT_ASK);
                 return;
             }
             if (code !== 0) {
                 // A last line without a trailing newline still carries evidence.
                 classify(stderrPending);
                 if (missingModule) {
-                    logger.debug(`hydrust is not installed in the environment of ${interpreter}.`);
+                    logSafe('debug', `hydrust is not installed in the environment of ${interpreter}.`);
                     finish(NOT_INSTALLED);
                     return;
                 }
                 if (brokenLookup) {
-                    logger.debug(
+                    logSafe(
+                        'debug',
                         `${interpreter} has a hydrust that cannot say where its binary is (exit code ${code}): ` +
                         stderr.trim().slice(-OUTPUT_LIMIT)
                     );
@@ -415,7 +426,8 @@ export async function findHydrustInInterpreter(
                 }
                 // The interpreter never got as far as answering, so the
                 // environment is still unknown and worth asking about again.
-                logger.debug(
+                logSafe(
+                    'debug',
                     `${interpreter} failed before it could say where hydrust is (exit code ${code}): ` +
                     stderr.trim().slice(-OUTPUT_LIMIT)
                 );
@@ -426,7 +438,8 @@ export async function findHydrustInInterpreter(
             noteMarked(pending);
             const binaryPath = answer;
             if (!binaryPath) {
-                logger.debug(
+                logSafe(
+                    'debug',
                     `${interpreter} gave an unusable hydrust location: ` +
                     JSON.stringify(stdout.slice(-512))
                 );

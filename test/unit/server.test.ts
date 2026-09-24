@@ -712,6 +712,37 @@ describe('looking for a server in the selected Python environment', () => {
         expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
     });
 
+    it('forgets only the given interpreter, so other windows keep their answers', async () => {
+        clientStub.initializeResult = initializeResult('0.5.0');
+        // Separate directories: the fingerprint covers the directory's mtime,
+        // so writing one interpreter must not retire the other's entry.
+        const dirA = path.join(scratchDir, 'envA');
+        const dirB = path.join(scratchDir, 'envB');
+        fs.mkdirSync(dirA, { recursive: true });
+        fs.mkdirSync(dirB, { recursive: true });
+        const interpreterA = path.join(dirA, 'python');
+        const interpreterB = path.join(dirB, 'python');
+        fs.writeFileSync(interpreterA, 'not a program', { mode: 0o755 });
+        fs.writeFileSync(interpreterB, 'not a program', { mode: 0o755 });
+        const fromEnv = environmentHydrust();
+        pythonStub.binaries[interpreterA] = fromEnv;
+        pythonStub.binaries[interpreterB] = fromEnv;
+        rememberVersion(fromEnv, 'v0.5.0');
+        const keyA = interpreterFingerprintOf(interpreterA);
+        const keyB = interpreterFingerprintOf(interpreterB);
+        stub.globalState.set(INTERPRETER_CACHE_KEY, { [keyA]: fromEnv, [keyB]: fromEnv });
+
+        await forgetServerLookups(asExtensionContext(context), interpreterA);
+
+        expect(Object.keys(interpreterCache())).toEqual([keyB]);
+
+        // B's answer is still stored, so starting for it asks nothing.
+        await start(settingsFor('', { interpreter: interpreterB, serverVersion: '0.4.0' }));
+
+        expect(pythonStub.lookups).toEqual([]);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(fromEnv);
+    });
+
     it('asks again once hydrust is installed into an environment already asked about', async () => {
         // The stored "not installed" is keyed on the environment's scripts
         // directory, so installing hydrust there retires it by itself.
