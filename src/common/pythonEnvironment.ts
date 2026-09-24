@@ -285,7 +285,13 @@ export async function findHydrustInInterpreter(
             // The tree may still hold the working directory as its cwd, so
             // answer from the `close` below once it is gone. The kill can
             // fail outright, though, so do not wait on it for long.
-            setTimeout(() => finish(timedOutResult()), KILL_GRACE_MS).unref();
+            setTimeout(() => {
+                // Flush a final answer without a trailing newline, the same as
+                // the `close` handler, so a tree that never closes gives the
+                // same result as one that does.
+                noteMarked(pending);
+                finish(timedOutResult());
+            }, KILL_GRACE_MS).unref();
         }, timeoutMs);
 
         // setEncoding, not per-chunk toString: a multi-byte character split
@@ -372,7 +378,10 @@ export async function findHydrustInInterpreter(
                     `${interpreter} gave an unusable hydrust location: ` +
                     JSON.stringify(stdout.slice(-512))
                 );
-                finish(NOT_INSTALLED);
+                // The import succeeded, so hydrust is installed; the answer was
+                // just unusable. Broken rather than missing, so it is not
+                // remembered against the interpreter and is asked again.
+                finish(BROKEN_INSTALL);
                 return;
             }
             finish({ kind: 'found', path: binaryPath });

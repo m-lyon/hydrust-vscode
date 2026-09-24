@@ -906,4 +906,28 @@ describe('the interpreter fingerprint', () => {
 
         expect(await interpreterFingerprint(interpreter, 'win32')).toBe(before);
     });
+
+    it('stats the interpreter itself, not what it links to', async () => {
+        // A venv `bin/python` is a symlink to the base interpreter, so stats
+        // taken through it would not move when the venv is rebuilt in place.
+        const root = path.join(scratchDir, 'venv', 'bin');
+        fs.mkdirSync(root, { recursive: true });
+        const base = path.join(root, 'python3.11');
+        const other = path.join(root, 'python3.11-rebuilt');
+        fs.writeFileSync(base, 'not a program', { mode: 0o755 });
+        fs.writeFileSync(other, 'not a program', { mode: 0o755 });
+        const interpreter = path.join(root, 'python');
+        fs.symlinkSync(base, interpreter);
+        const dirTimes = fs.statSync(root);
+
+        const before = await interpreterFingerprint(interpreter, 'linux');
+
+        fs.unlinkSync(interpreter);
+        fs.symlinkSync(other, interpreter);
+        // Put the directory's mtime back, so only the symlink's own stats
+        // differ: otherwise the directory alone would move the fingerprint.
+        fs.utimesSync(root, dirTimes.atime, dirTimes.mtime);
+
+        expect(await interpreterFingerprint(interpreter, 'linux')).not.toBe(before);
+    });
 });

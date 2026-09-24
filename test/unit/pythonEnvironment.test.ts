@@ -125,19 +125,19 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
     it('rejects a path printed without the marker', async () => {
         const interpreter = fakeInterpreter('echo /venv/bin/hydrust');
 
-        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled', broken: true });
     });
 
     it('rejects a relative path', async () => {
         const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}bin/hydrust`);
 
-        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled', broken: true });
     });
 
     it('rejects empty output', async () => {
         const interpreter = fakeInterpreter('true');
 
-        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled', broken: true });
     });
 
     it('treats a non-zero exit as not found, even with a path on stdout', async () => {

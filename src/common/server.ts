@@ -72,6 +72,20 @@ export async function forgetServerLookups(context?: vscode.ExtensionContext): Pr
     }
 }
 
+/** Store what an interpreter answered, letting a storage failure pass: it must
+ * not change which server is chosen. */
+async function tryRememberInterpreterLookup(
+    context: vscode.ExtensionContext,
+    fingerprint: string,
+    found: string | undefined
+): Promise<void> {
+    try {
+        await rememberInterpreterLookup(context, fingerprint, found);
+    } catch (err) {
+        logger.warn(`Could not remember what an interpreter reported: ${err}`);
+    }
+}
+
 /** Store what an interpreter answered, dropping the oldest entries past the cap. */
 async function rememberInterpreterLookup(
     context: vscode.ExtensionContext,
@@ -186,7 +200,7 @@ async function lookUpInterpreter(
                 // Rewrite it so an interpreter still in use keeps its place.
                 // Skipped when it is already the newest entry, so the common
                 // case does not write to persisted storage on every start.
-                await rememberInterpreterLookup(context, fingerprint, remembered);
+                await tryRememberInterpreterLookup(context, fingerprint, remembered);
             }
             return remembered;
         }
@@ -220,7 +234,7 @@ async function lookUpInterpreter(
     }
     interpreterBinaries.set(interpreter, found);
     if (fingerprint && !(lookup.kind === 'found' && lookup.timedOut)) {
-        await rememberInterpreterLookup(context, fingerprint, found);
+        await tryRememberInterpreterLookup(context, fingerprint, found);
     }
     return found;
 }
