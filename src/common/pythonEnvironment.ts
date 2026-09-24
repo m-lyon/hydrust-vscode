@@ -285,6 +285,11 @@ export async function findHydrustInInterpreter(
         });
         child.on('error', (err) => {
             clearTimeout(timer);
+            if (timedOut) {
+                // A failed kill below the timer, not a failure to run.
+                finish(TIMED_OUT);
+                return;
+            }
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
             finish(COULD_NOT_ASK);
         });
