@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs-extra';
+import * as path from 'path';
 import { spawn } from 'child_process';
 import { logger } from './logger';
 import {
@@ -57,7 +58,7 @@ const SOURCE_LABELS: Record<ServerSource, string> = {
  * Build the cache key for a binary: its path plus enough of its file stats to
  * notice when it has been replaced in place.
  */
-export async function binaryFingerprint(binaryPath: string): Promise<string | undefined> {
+async function binaryFingerprint(binaryPath: string): Promise<string | undefined> {
     try {
         const stats = await fs.stat(binaryPath);
         return `${binaryPath}|${Math.round(stats.mtimeMs)}|${stats.size}`;
@@ -72,11 +73,23 @@ export async function binaryFingerprint(binaryPath: string): Promise<string | un
  * does not follow symlinks: a venv's `bin/python` is normally a symlink to
  * the base interpreter, and stats taken through it would not change when the
  * venv is deleted and rebuilt at the same path.
+ *
+ * The directory holding the interpreter (`bin`, or `Scripts` on Windows) goes
+ * in too: installing hydrust into the environment drops a script in there, so
+ * a remembered "not installed" for that environment stops being used as soon
+ * as it is installed.
  */
 export async function interpreterFingerprint(interpreterPath: string): Promise<string | undefined> {
     try {
         const stats = await fs.lstat(interpreterPath);
-        return `${interpreterPath}|${Math.round(stats.mtimeMs)}|${stats.size}`;
+        let scripts = '';
+        try {
+            const dir = await fs.stat(path.dirname(interpreterPath));
+            scripts = `|${Math.round(dir.mtimeMs)}`;
+        } catch (err) {
+            logger.debug(`Could not stat the directory of ${interpreterPath} for the interpreter cache: ${err}`);
+        }
+        return `${interpreterPath}|${Math.round(stats.mtimeMs)}|${stats.size}${scripts}`;
     } catch (err) {
         logger.debug(`Could not stat ${interpreterPath} for the interpreter cache: ${err}`);
         return undefined;

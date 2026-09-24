@@ -203,6 +203,13 @@ function fingerprintOf(filePath: string): string {
     return `${filePath}|${Math.round(stats.mtimeMs)}|${stats.size}`;
 }
 
+/** The fingerprint the interpreter cache keys an interpreter on. */
+function interpreterFingerprintOf(interpreterPath: string): string {
+    const stats = fs.lstatSync(interpreterPath);
+    const dir = fs.statSync(path.dirname(interpreterPath));
+    return `${interpreterPath}|${Math.round(stats.mtimeMs)}|${stats.size}|${Math.round(dir.mtimeMs)}`;
+}
+
 /** Whatever is currently in the interpreter lookup cache. */
 function interpreterCache(): Record<string, string | null> {
     return (stub.globalState.get(INTERPRETER_CACHE_KEY) as Record<string, string | null>) ?? {};
@@ -748,7 +755,7 @@ describe('looking for a server in the selected Python environment', () => {
         expect(Object.keys(cache)).toHaveLength(INTERPRETER_CACHE_LIMIT);
         expect(Object.keys(cache)).not.toContain('/old/python-0|1|2');
         expect(cache[`/old/python-${INTERPRETER_CACHE_LIMIT - 1}|1|2`]).toBeNull();
-        expect(cache[fingerprintOf(interpreter)]).toBe(fromEnv);
+        expect(cache[interpreterFingerprintOf(interpreter)]).toBe(fromEnv);
     });
 
     it('keeps an interpreter that is still in use out of the way of the cap', async () => {
@@ -759,7 +766,7 @@ describe('looking for a server in the selected Python environment', () => {
         const fromEnv = environmentHydrust();
         pythonStub.binaries[interpreter] = fromEnv;
         rememberVersion(fromEnv, 'v0.5.0');
-        const seeded: Record<string, string | null> = { [fingerprintOf(interpreter)]: fromEnv };
+        const seeded: Record<string, string | null> = { [interpreterFingerprintOf(interpreter)]: fromEnv };
         for (let index = 0; index < INTERPRETER_CACHE_LIMIT - 1; index += 1) {
             seeded[`/old/python-${index}|1|2`] = null;
         }
@@ -774,7 +781,7 @@ describe('looking for a server in the selected Python environment', () => {
 
         const cache = interpreterCache();
         expect(Object.keys(cache)).toHaveLength(INTERPRETER_CACHE_LIMIT);
-        expect(cache[fingerprintOf(interpreter)]).toBe(fromEnv);
+        expect(cache[interpreterFingerprintOf(interpreter)]).toBe(fromEnv);
         expect(Object.keys(cache)).not.toContain('/old/python-0|1|2');
         expect(pythonStub.lookups).toEqual([newcomer]);
     });

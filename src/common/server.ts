@@ -154,8 +154,9 @@ function recheckUnknownOnce(binaryPath: string): boolean {
  * otherwise stall for the whole lookup timeout before falling back to PATH.
  *
  * A definitive answer is also stored in globalState against the interpreter's
- * path and its own file stats (not the symlink target's), so a new window does
- * not pay the interpreter startup again. A hang is only remembered for the
+ * path, its own file stats (not the symlink target's) and the state of the
+ * directory it lives in, so a new window does not pay the interpreter startup
+ * again, while installing hydrust into the environment drops the entry. A hang is only remembered for the
  * session, since it says nothing about the environment, and an installed
  * hydrust that could not say where its binary is is not remembered at all,
  * since fixing that does not change the interpreter the entry is keyed on.

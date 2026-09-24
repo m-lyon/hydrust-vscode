@@ -77,10 +77,12 @@ Python extension's active interpreter. The remaining fallbacks listed below are
 applied by the server itself, so no environment lookup happens for them.
 
 Each interpreter is asked only once, since starting one is slow, and its answer
-is remembered across windows and reloads. After installing `hydrust` into an
-environment that has already been used, run **Hydrust: Restart Server** from the
-command palette to have it asked again; other restarts, such as a settings
-change, reuse the earlier answer. Only a definitive answer is remembered that
+is remembered across windows and reloads. Installing `hydrust` into an
+environment that has already been used changes its `bin` (or `Scripts`)
+directory, which is part of what the answer is remembered against, so the next
+start asks it again; **Hydrust: Restart Server** from the command palette also
+forces that. Other restarts, such as a settings change, reuse the earlier
+answer. Only a definitive answer is remembered that
 way: an interpreter that could not be run at all, that reported a path which is
 not on disk, or that has a `hydrust` which could not say where its binary is, is
 asked again on every start, and one that hung is not asked again for the rest of
