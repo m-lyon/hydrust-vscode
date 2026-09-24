@@ -98,9 +98,13 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
         }
     } else if (child.pid !== undefined) {
         try {
-            // Negative pid: the whole group the detached child leads.
-            process.kill(-child.pid, 'SIGKILL');
-            return;
+            // Negative pid: the whole group the detached child leads. Node
+            // does not guard this form against a reaped child, so the pid is
+            // only used while the child is known to be live.
+            if (child.exitCode === null && child.signalCode === null) {
+                process.kill(-child.pid, 'SIGKILL');
+                return;
+            }
         } catch {
             // Already gone, or not permitted to signal the group: the direct
             // child is still worth killing.
@@ -319,7 +323,7 @@ export async function findHydrustInInterpreter(
                 return;
             }
             if (code !== 0) {
-                if (/No module named '?hydrust'?/.test(stderr)) {
+                if (/No module named '?hydrust'?(?![\w.])/.test(stderr)) {
                     logger.debug(`hydrust is not installed in the environment of ${interpreter}.`);
                     finish(NOT_INSTALLED);
                     return;

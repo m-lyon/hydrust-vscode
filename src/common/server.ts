@@ -59,6 +59,7 @@ export const INTERPRETER_CACHE_LIMIT = 16;
  */
 export async function forgetInterpreterLookups(context?: vscode.ExtensionContext): Promise<void> {
     interpreterBinaries.clear();
+    recheckedUnknown.clear();
     if (context) {
         try {
             await context.globalState.update(INTERPRETER_CACHE_KEY, {});
