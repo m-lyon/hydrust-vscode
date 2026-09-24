@@ -836,32 +836,37 @@ describe('looking for a server in the selected Python environment', () => {
     it('asks again when the interpreter could not be run at all', async () => {
         // The handshake records the version it reports, so it must match.
         clientStub.initializeResult = initializeResult('0.5.0');
-        pythonStub.binaries[INTERPRETER] = 'couldNotAsk';
+        const interpreter = writeInterpreter('python');
+        pythonStub.binaries[interpreter] = 'couldNotAsk';
         const onPath = writeBinary('hydrust');
         rememberVersion(onPath, 'v0.5.0');
         whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
 
         await start(settings);
         await start(settings);
 
-        expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
+        expect(interpreterCache()).toEqual({});
+        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
         expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
     });
 
     it('does not ask again for an interpreter that hung, so the stall is paid once', async () => {
         // The handshake records the version it reports, so it must match.
         clientStub.initializeResult = initializeResult('0.5.0');
-        pythonStub.binaries[INTERPRETER] = 'timedOut';
+        const interpreter = writeInterpreter('python');
+        pythonStub.binaries[interpreter] = 'timedOut';
         const onPath = writeBinary('hydrust');
         rememberVersion(onPath, 'v0.5.0');
         whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
 
         await start(settings);
         await start(settings);
 
-        expect(pythonStub.lookups).toEqual([INTERPRETER]);
+        // A hang says nothing about the environment, so it is never persisted.
+        expect(interpreterCache()).toEqual({});
+        expect(pythonStub.lookups).toEqual([interpreter]);
         expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
     });
 

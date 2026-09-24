@@ -180,8 +180,13 @@ async function lookUpInterpreter(
         const remembered = stored[fingerprint] ?? undefined;
         if (!remembered || await fsapi.pathExists(remembered)) {
             interpreterBinaries.set(interpreter, remembered);
-            // Rewrite it so an interpreter still in use keeps its place.
-            await rememberInterpreterLookup(context, fingerprint, remembered);
+            const keys = Object.keys(stored);
+            if (keys[keys.length - 1] !== fingerprint) {
+                // Rewrite it so an interpreter still in use keeps its place.
+                // Skipped when it is already the newest entry, so the common
+                // case does not write to persisted storage on every start.
+                await rememberInterpreterLookup(context, fingerprint, remembered);
+            }
             return remembered;
         }
     }

@@ -84,7 +84,7 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
  * the whole tree on Windows; elsewhere the child leads its own process group
  * (see `detached` below), so the group is signalled instead.
  */
-function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
+function killTree(child: ChildProcess, platform: NodeJS.Platform, childExited: boolean): void {
     if (platform === 'win32' && child.pid !== undefined) {
         try {
             const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
@@ -100,16 +100,13 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
         } catch {
             // Fall through to killing the child on its own.
         }
-    } else if (child.pid !== undefined) {
+    } else if (child.pid !== undefined && !childExited) {
         try {
-            // Negative pid: the whole group the detached child leads. The
-            // direct child may already have been reaped here — a shim that
-            // forks and exits is exactly the case this exists for — but the
-            // pid number stays allocated while it is still in use as a group
-            // id, so the signal cannot reach an unrelated group while any
-            // member of this one is alive. It is: this only runs from the
-            // timeout, which both `close` and `error` clear, so the tree is
-            // still holding the pipes open here.
+            // Negative pid: the whole group the detached child leads. Only
+            // while the child itself is alive, so the pid is still allocated:
+            // once it has been reaped the number is free to be reused, and a
+            // grandchild that left the group (a wrapper that calls setsid)
+            // would leave the signal to land on an unrelated group.
             process.kill(-child.pid, 'SIGKILL');
             return;
         } catch {
@@ -265,13 +262,17 @@ export async function findHydrustInInterpreter(
         }
 
         let timedOut = false;
+        let exited = false;
+        child.on('exit', () => {
+            exited = true;
+        });
         const timer = setTimeout(() => {
             timedOut = true;
             logger.warn(
                 `${interpreter} did not answer within ${timeoutMs}ms when asked where hydrust is installed. ` +
                 'Looking on PATH instead.'
             );
-            killTree(child, platform);
+            killTree(child, platform, exited);
             // A shim that forked the real interpreter leaves a grandchild
             // holding these pipes open, so release them now.
             child.stdout?.destroy();
