@@ -15,7 +15,7 @@ import {
 } from './compatTable';
 import { ExtensionSettings } from './settings';
 import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
-import { ResolvedBinary, ServerCompat, probeBinaryVersion } from './compat';
+import { ResolvedBinary, ServerCompat, binaryFingerprint, probeBinaryVersion } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
 import { findHydrustInInterpreter } from './pythonEnvironment';
@@ -46,9 +46,45 @@ const warnedServerPaths = new Set<string>();
  */
 const interpreterBinaries = new Map<string, string | undefined>();
 
-/** Forget what the interpreters reported, so the next start asks them again. */
-export function forgetInterpreterLookups(): void {
+/** globalState key holding what each interpreter last reported. */
+export const INTERPRETER_CACHE_KEY = 'hydrust.interpreterLookup.v1';
+
+/** How many interpreter answers to keep. The oldest are dropped past this. */
+const INTERPRETER_CACHE_LIMIT = 16;
+
+/**
+ * Forget what the interpreters reported, so the next start asks them again.
+ * The stored answers go too when a context is given, since a window reload is
+ * not what the user runs after installing hydrust into the environment.
+ */
+export function forgetInterpreterLookups(context?: vscode.ExtensionContext): void {
     interpreterBinaries.clear();
+    if (context) {
+        void context.globalState.update(INTERPRETER_CACHE_KEY, {});
+    }
+}
+
+/** Store what an interpreter answered, dropping the oldest entries past the cap. */
+async function rememberInterpreterLookup(
+    context: vscode.ExtensionContext,
+    fingerprint: string,
+    found: string | undefined
+): Promise<void> {
+    const existing = context.globalState.get<Record<string, string | null>>(INTERPRETER_CACHE_KEY, {});
+    const cache: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(existing)) {
+        if (key !== fingerprint) {
+            cache[key] = value;
+        }
+    }
+    cache[fingerprint] = found ?? null;
+
+    const keys = Object.keys(cache);
+    for (const stale of keys.slice(0, Math.max(0, keys.length - INTERPRETER_CACHE_LIMIT))) {
+        delete cache[stale];
+    }
+
+    await context.globalState.update(INTERPRETER_CACHE_KEY, cache);
 }
 
 /**
@@ -108,14 +144,36 @@ function recheckUnknownOnce(binaryPath: string): boolean {
  * could not be asked at all is not remembered,
  * so a later start asks it again, except one that hung: every start would
  * otherwise stall for the whole lookup timeout before falling back to PATH.
+ *
+ * A definitive answer is also stored in globalState against the interpreter's
+ * path and file stats, so a new window does not pay the interpreter startup
+ * again. A hang is only remembered for the session, since it says nothing
+ * about the environment. **Hydrust: Restart Server** clears both.
  */
-async function lookUpInterpreter(interpreter: string, probeTimeoutMs?: number): Promise<string | undefined> {
+async function lookUpInterpreter(
+    interpreter: string,
+    context: vscode.ExtensionContext,
+    probeTimeoutMs?: number
+): Promise<string | undefined> {
     if (interpreterBinaries.has(interpreter)) {
         const remembered = interpreterBinaries.get(interpreter);
         if (!remembered || await fsapi.pathExists(remembered)) {
             return remembered;
         }
     }
+
+    const fingerprint = await binaryFingerprint(interpreter);
+    const stored = context.globalState.get<Record<string, string | null>>(INTERPRETER_CACHE_KEY, {});
+    if (fingerprint && Object.prototype.hasOwnProperty.call(stored, fingerprint)) {
+        const remembered = stored[fingerprint] ?? undefined;
+        if (!remembered || await fsapi.pathExists(remembered)) {
+            interpreterBinaries.set(interpreter, remembered);
+            // Rewrite it so an interpreter still in use keeps its place.
+            await rememberInterpreterLookup(context, fingerprint, remembered);
+            return remembered;
+        }
+    }
+
     const lookup = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
     if (lookup.kind === 'couldNotAsk') {
         if (lookup.timedOut) {
@@ -133,6 +191,9 @@ async function lookUpInterpreter(interpreter: string, probeTimeoutMs?: number): 
         return undefined;
     }
     interpreterBinaries.set(interpreter, found);
+    if (fingerprint) {
+        await rememberInterpreterLookup(context, fingerprint, found);
+    }
     return found;
 }
 
@@ -151,7 +212,7 @@ async function findInPythonEnvironment(
     context: vscode.ExtensionContext,
     probeTimeoutMs?: number
 ): Promise<ResolvedBinary | undefined> {
-    const binaryPath = await lookUpInterpreter(interpreter, probeTimeoutMs);
+    const binaryPath = await lookUpInterpreter(interpreter, context, probeTimeoutMs);
     if (!binaryPath) {
         return undefined;
     }

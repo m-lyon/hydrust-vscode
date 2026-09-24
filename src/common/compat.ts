@@ -57,7 +57,7 @@ const SOURCE_LABELS: Record<ServerSource, string> = {
  * Build the cache key for a binary: its path plus enough of its file stats to
  * notice when it has been replaced in place.
  */
-async function binaryFingerprint(binaryPath: string): Promise<string | undefined> {
+export async function binaryFingerprint(binaryPath: string): Promise<string | undefined> {
     try {
         const stats = await fs.stat(binaryPath);
         return `${binaryPath}|${Math.round(stats.mtimeMs)}|${stats.size}`;

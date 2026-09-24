@@ -161,7 +161,12 @@ export async function findHydrustInInterpreter(
                 marker >= 0;
                 marker = line.indexOf(BINARY_LINE_PREFIX, marker + BINARY_LINE_PREFIX.length)
             ) {
-                const candidate = line.slice(marker + BINARY_LINE_PREFIX.length).trim();
+                // Stop at the next marker: a marked segment must not swallow
+                // the segment that follows it, which may be the real answer.
+                const next = line.indexOf(BINARY_LINE_PREFIX, marker + BINARY_LINE_PREFIX.length);
+                const candidate = line
+                    .slice(marker + BINARY_LINE_PREFIX.length, next === -1 ? undefined : next)
+                    .trim();
                 if (path.isAbsolute(candidate)) {
                     answer ??= candidate;
                     return;

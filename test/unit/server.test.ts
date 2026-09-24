@@ -644,6 +644,43 @@ describe('looking for a server in the selected Python environment', () => {
         expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
     });
 
+    it('remembers the answer across windows, so a reload does not ask again', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        // Stored against the interpreter's file stats, so it has to be on disk.
+        const interpreter = path.join(scratchDir, 'python');
+        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
+        const fromEnv = environmentHydrust();
+        pythonStub.binaries[interpreter] = fromEnv;
+        rememberVersion(fromEnv, 'v0.5.0');
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
+
+        await start(settings);
+        // A reload drops the session cache but keeps globalState.
+        forgetInterpreterLookups();
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([interpreter]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
+    });
+
+    it('asks again after a restart even though the answer was stored', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const interpreter = path.join(scratchDir, 'python');
+        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
+        const fromEnv = environmentHydrust();
+        pythonStub.binaries[interpreter] = fromEnv;
+        rememberVersion(fromEnv, 'v0.5.0');
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
+
+        await start(settings);
+        forgetInterpreterLookups(context as unknown as vscode.ExtensionContext);
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
+    });
+
     it('asks again when the interpreter could not be run at all', async () => {
         // The handshake records the version it reports, so it must match.
         clientStub.initializeResult = initializeResult('0.5.0');

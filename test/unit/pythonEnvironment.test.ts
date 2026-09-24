@@ -262,6 +262,14 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
+    it('never folds a following marked segment into the answer', async () => {
+        const interpreter = fakeInterpreter(
+            `printf "${BINARY_LINE_PREFIX}/echoed/shim/line "\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`
+        );
+
+        expect(await lookUpPath(interpreter)).not.toContain(BINARY_LINE_PREFIX);
+    });
+
     it('ignores marker-carrying noise printed before the answer', async () => {
         // A shim without `@echo off` echoes the command line, script and all.
         const interpreter = fakeInterpreter(

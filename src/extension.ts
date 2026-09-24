@@ -174,7 +174,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
         registerCommand(`${serverId}.restart`, async () => {
             logger.info('Restart command triggered');
-            forgetInterpreterLookups();
+            forgetInterpreterLookups(context);
             await runServer();
         }),
         registerCommand(`${serverId}.showLogs`, () => {
