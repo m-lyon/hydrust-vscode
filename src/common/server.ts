@@ -15,7 +15,7 @@ import {
 } from './compatTable';
 import { ExtensionSettings } from './settings';
 import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
-import { ResolvedBinary, ServerCompat, binaryFingerprint, probeBinaryVersion } from './compat';
+import { ResolvedBinary, ServerCompat, interpreterFingerprint, probeBinaryVersion } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
 import { findHydrustInInterpreter } from './pythonEnvironment';
@@ -40,8 +40,8 @@ const warnedServerPaths = new Set<string>();
  * What each Python interpreter last reported as its hydrust, including the
  * common answer of nothing at all. Starting an interpreter is slow, and a
  * restart happens for every settings change and every interpreter change, so
- * the answer is remembered for the session; `forgetInterpreterLookups` drops
- * it when the user asks for a restart, which is what they do after installing
+ * the answer is remembered for the session; `forgetServerLookups` drops it
+ * when the user asks for a restart, which is what they do after installing
  * hydrust into the environment.
  */
 const interpreterBinaries = new Map<string, string | undefined>();
@@ -53,11 +53,14 @@ export const INTERPRETER_CACHE_KEY = 'hydrust.interpreterLookup.v1';
 export const INTERPRETER_CACHE_LIMIT = 16;
 
 /**
- * Forget what the interpreters reported, so the next start asks them again.
- * The stored answers go too when a context is given, since a window reload is
- * not what the user runs after installing hydrust into the environment.
+ * Forget what the interpreters reported, so the next start asks them again,
+ * along with the once-per-session `--version` recheck of binaries whose
+ * version is remembered as unknown, so a restart re-probes those too. The
+ * stored interpreter answers go too when a context is given, since a window
+ * reload is not what the user runs after installing hydrust into the
+ * environment.
  */
-export async function forgetInterpreterLookups(context?: vscode.ExtensionContext): Promise<void> {
+export async function forgetServerLookups(context?: vscode.ExtensionContext): Promise<void> {
     interpreterBinaries.clear();
     recheckedUnknown.clear();
     if (context) {
@@ -151,11 +154,12 @@ function recheckUnknownOnce(binaryPath: string): boolean {
  * otherwise stall for the whole lookup timeout before falling back to PATH.
  *
  * A definitive answer is also stored in globalState against the interpreter's
- * path and file stats, so a new window does not pay the interpreter startup
- * again. A hang is only remembered for the session, since it says nothing
- * about the environment, and neither is an installed hydrust that could not say
- * where its binary is, since fixing that does not change the interpreter the
- * entry is keyed on. **Hydrust: Restart Server** clears both.
+ * path and its own file stats (not the symlink target's), so a new window does
+ * not pay the interpreter startup again. A hang is only remembered for the
+ * session, since it says nothing about the environment, and an installed
+ * hydrust that could not say where its binary is is not remembered at all,
+ * since fixing that does not change the interpreter the entry is keyed on.
+ * **Hydrust: Restart Server** clears both.
  */
 async function lookUpInterpreter(
     interpreter: string,
@@ -169,7 +173,7 @@ async function lookUpInterpreter(
         }
     }
 
-    const fingerprint = await binaryFingerprint(interpreter);
+    const fingerprint = await interpreterFingerprint(interpreter);
     const stored = context.globalState.get<Record<string, string | null>>(INTERPRETER_CACHE_KEY, {});
     if (fingerprint && Object.prototype.hasOwnProperty.call(stored, fingerprint)) {
         const remembered = stored[fingerprint] ?? undefined;
@@ -197,8 +201,13 @@ async function lookUpInterpreter(
         logger.warn(`Ignoring ${found}: reported by ${interpreter} but not found on disk.`);
         return undefined;
     }
+    if (lookup.kind === 'notInstalled' && lookup.broken) {
+        // Not remembered at all: fixing a half-finished install does not
+        // change the interpreter, so every later start should ask again.
+        return undefined;
+    }
     interpreterBinaries.set(interpreter, found);
-    if (fingerprint && !(lookup.kind === 'notInstalled' && lookup.broken)) {
+    if (fingerprint) {
         await rememberInterpreterLookup(context, fingerprint, found);
     }
     return found;

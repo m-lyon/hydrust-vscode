@@ -68,6 +68,22 @@ export async function binaryFingerprint(binaryPath: string): Promise<string | un
 }
 
 /**
+ * Build the cache key for an interpreter. Unlike `binaryFingerprint` this
+ * does not follow symlinks: a venv's `bin/python` is normally a symlink to
+ * the base interpreter, and stats taken through it would not change when the
+ * venv is deleted and rebuilt at the same path.
+ */
+export async function interpreterFingerprint(interpreterPath: string): Promise<string | undefined> {
+    try {
+        const stats = await fs.lstat(interpreterPath);
+        return `${interpreterPath}|${Math.round(stats.mtimeMs)}|${stats.size}`;
+    } catch (err) {
+        logger.debug(`Could not stat ${interpreterPath} for the interpreter cache: ${err}`);
+        return undefined;
+    }
+}
+
+/**
  * Run `<binary> --version` and hand back whatever it printed on stdout.
  *
  * A server from v0.4.0 prints one line and exits. Anything older has no such

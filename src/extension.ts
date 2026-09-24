@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { LanguageClient } from 'vscode-languageclient/node';
 import { LazyOutputChannel, logger } from "./common/logger";
-import { forgetInterpreterLookups, startServer, stopServer } from './common/server';
+import { forgetServerLookups, startServer, stopServer } from './common/server';
 import { getExtensionSettings, checkIfConfigurationChanged } from './common/settings';
 import { getProjectRoot, registerCommand, onDidChangeConfiguration } from './common/vscodeapi';
 import { CompatReporter } from './common/compat';
@@ -48,7 +48,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // extension is activated again without the module being reloaded.
     deactivating = false;
     pendingRun = undefined;
-    void forgetInterpreterLookups();
+    void forgetServerLookups();
 
     const serverInfo = loadServerDefaults();
     const serverName = serverInfo.name;
@@ -174,7 +174,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
         registerCommand(`${serverId}.restart`, async () => {
             logger.info('Restart command triggered');
-            await forgetInterpreterLookups(context);
+            await forgetServerLookups(context);
             await runServer();
         }),
         registerCommand(`${serverId}.showLogs`, () => {

@@ -146,7 +146,7 @@ vi.mock('vscode-languageclient/node', () => {
 import {
     INTERPRETER_CACHE_KEY,
     INTERPRETER_CACHE_LIMIT,
-    forgetInterpreterLookups,
+    forgetServerLookups,
     startServer,
 } from '../../src/common/server';
 import { PROBE_CACHE_KEY } from '../../src/common/compat';
@@ -267,7 +267,7 @@ beforeEach(() => {
     whichStub.paths = {};
     pythonStub.binaries = {};
     pythonStub.lookups = [];
-    void forgetInterpreterLookups();
+    void forgetServerLookups();
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
     outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
@@ -661,7 +661,7 @@ describe('looking for a server in the selected Python environment', () => {
         const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
 
         await start(settings);
-        await forgetInterpreterLookups();
+        await forgetServerLookups();
         const fromEnv = environmentHydrust();
         rememberVersion(fromEnv, 'v0.5.0');
         await start(settings);
@@ -683,7 +683,7 @@ describe('looking for a server in the selected Python environment', () => {
 
         await start(settings);
         // A reload drops the session cache but keeps globalState.
-        await forgetInterpreterLookups();
+        await forgetServerLookups();
         await start(settings);
 
         expect(pythonStub.lookups).toEqual([interpreter]);
@@ -701,7 +701,7 @@ describe('looking for a server in the selected Python environment', () => {
         const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
 
         await start(settings);
-        await forgetInterpreterLookups(context as unknown as vscode.ExtensionContext);
+        await forgetServerLookups(context as unknown as vscode.ExtensionContext);
         await start(settings);
 
         expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
@@ -720,7 +720,7 @@ describe('looking for a server in the selected Python environment', () => {
 
         await start(settings);
         // A reload drops the session cache but keeps globalState.
-        await forgetInterpreterLookups();
+        await forgetServerLookups();
         await start(settings);
 
         expect(interpreterCache()).toEqual({});
@@ -729,8 +729,8 @@ describe('looking for a server in the selected Python environment', () => {
     });
 
     it('drops the oldest remembered interpreters once the cache is full', async () => {
-        // Every environment rebuild makes a new fingerprint, so without a cap
-        // the cache would keep one dead entry per interpreter ever selected.
+        // Every interpreter ever selected takes a slot, so without a cap the
+        // cache would grow without bound.
         clientStub.initializeResult = initializeResult('0.5.0');
         const seeded: Record<string, string | null> = {};
         for (let index = 0; index < INTERPRETER_CACHE_LIMIT; index += 1) {
@@ -769,7 +769,7 @@ describe('looking for a server in the selected Python environment', () => {
         await start(settingsFor('', { interpreter, serverVersion: '0.4.0' }));
         const newcomer = writeInterpreter('other-python');
         pythonStub.binaries[newcomer] = fromEnv;
-        await forgetInterpreterLookups();
+        await forgetServerLookups();
         await start(settingsFor('', { interpreter: newcomer, serverVersion: '0.4.0' }));
 
         const cache = interpreterCache();

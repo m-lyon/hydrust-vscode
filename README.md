@@ -83,8 +83,8 @@ command palette to have it asked again; other restarts, such as a settings
 change, reuse the earlier answer. Only a definitive answer is remembered that
 way: an interpreter that could not be run at all, that reported a path which is
 not on disk, or that has a `hydrust` which could not say where its binary is, is
-asked again on the next start, and one that hung is not asked again for the rest
-of the session.
+asked again on every start, and one that hung is not asked again for the rest of
+the session.
 
 ## Python Environment Detection
 

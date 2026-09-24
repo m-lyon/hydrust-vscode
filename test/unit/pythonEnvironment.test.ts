@@ -312,13 +312,15 @@ describe.skipIf(!python3 || isWindows)('the lookup script, run by a real python3
         delete process.env.PYTHONPATH;
         const interpreter = fakeInterpreter(`exec "${python3}" -S "$@"`);
 
-        expect(await lookUpPath(interpreter)).toBeUndefined();
+        // Nothing installed, so not the `broken` answer that is kept out of
+        // globalState.
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled' });
     });
 
     it('is not found when find_hydrust_bin() raises', async () => {
         const interpreter = standInFinder('raise FileNotFoundError("/venv/bin/hydrust")');
 
-        expect(await lookUpPath(interpreter)).toBeUndefined();
+        expect(await findHydrustInInterpreter(interpreter)).toEqual({ kind: 'notInstalled', broken: true });
     });
 
     it('ignores a hydrust that only an inherited PYTHONPATH would find', async () => {
@@ -335,7 +337,8 @@ describe.skipIf(!python3 || isWindows)('the lookup script, run by a real python3
     });
 
     it('is not found for a hydrust package without find_hydrust_bin()', async () => {
-        expect(await lookUpPath(standInInterpreter(''))).toBeUndefined();
+        expect(await findHydrustInInterpreter(standInInterpreter('')))
+            .toEqual({ kind: 'notInstalled', broken: true });
     });
 
     it('keeps a non-ASCII path intact', async () => {

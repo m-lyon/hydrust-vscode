@@ -377,26 +377,34 @@ describe('the find_hydrust_bin contract', () => {
     /** The first server release the extension claims ships it (pythonEnvironment.ts). */
     const CLAIMED_SINCE = 'v0.5.0';
 
-    function expectExported(tag: string): void {
-        const source = fileAtTag(tag, 'python/hydrust/__init__.py');
-        expect(source, `${tag} has no python/hydrust/__init__.py, so nothing exports find_hydrust_bin`)
+    function expectExports(source: string | undefined, where: string): void {
+        expect(source, `${where} has no python/hydrust/__init__.py, so nothing exports find_hydrust_bin`)
             .toBeDefined();
         expect(
             /^def find_hydrust_bin\(/m.test(source!),
-            `${tag} defines no find_hydrust_bin in the hydrust package`
+            `${where} defines no find_hydrust_bin in the hydrust package`
         ).toBe(true);
         expect(
             source!.includes('"find_hydrust_bin"'),
-            `${tag} does not list find_hydrust_bin in the hydrust package's __all__`
+            `${where} does not list find_hydrust_bin in the hydrust package's __all__`
         ).toBe(true);
     }
 
     it(`exports it from the hydrust package at ${CLAIMED_SINCE}`, () => {
-        expect(tags, `${CLAIMED_SINCE} is not a released tag`).toContain(CLAIMED_SINCE);
-        expectExported(CLAIMED_SINCE);
+        if (!tags.includes(CLAIMED_SINCE)) {
+            // Not released yet, so the contract only exists in the working tree.
+            expectExports(fileInWorkingTree('python/hydrust/__init__.py'), 'the server working tree');
+            return;
+        }
+        expectExports(fileAtTag(CLAIMED_SINCE, 'python/hydrust/__init__.py'), CLAIMED_SINCE);
     });
 
     it('still exports it at the newest released tag', () => {
-        expectExported(tags[tags.length - 1]);
+        const newest = tags[tags.length - 1];
+        if (!tagAtLeast(newest, CLAIMED_SINCE)) {
+            // Every release so far predates the contract; nothing to check.
+            return;
+        }
+        expectExports(fileAtTag(newest, 'python/hydrust/__init__.py'), newest);
     });
 });
