@@ -87,7 +87,10 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
 function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
     if (platform === 'win32' && child.pid !== undefined) {
         try {
-            const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+            // Absolute path: a bare name is resolved against the current
+            // directory before PATH, which the extension host does not control.
+            const taskkill = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe');
+            const killer = spawn(taskkill, ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
             // taskkill missing, or run but refused (an elevated or protected
             // process): the direct child is still worth killing.
             killer.on('error', () => child.kill('SIGKILL'));

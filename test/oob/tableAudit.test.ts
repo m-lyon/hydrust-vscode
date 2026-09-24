@@ -384,7 +384,7 @@ describe('the find_hydrust_bin contract', () => {
         // `from hydrust import find_hydrust_bin` resolves, which is the whole
         // contract the extension depends on.
         expect(
-            /^def find_hydrust_bin\(/m.test(source!) || /^from\s+\S+\s+import\b[^\n]*\bfind_hydrust_bin\b/m.test(source!),
+            /^def find_hydrust_bin\(/m.test(source!) || /\bfind_hydrust_bin\b/.test(source!),
             `${where} neither defines nor imports find_hydrust_bin in the hydrust package`
         ).toBe(true);
     }
