@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -61,6 +61,29 @@ const COULD_NOT_ASK: InterpreterLookup = { kind: 'couldNotAsk' };
 const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
 
 /**
+ * Stop a hung lookup, and everything it started.
+ *
+ * On Windows a `.bat`/`.cmd` shim runs through cmd.exe, so the child is the
+ * shell and the interpreter it forked is a grandchild that would survive a
+ * kill of the shell alone, holding the lookup's working directory open for the
+ * rest of the session. taskkill takes the whole tree; elsewhere the child is
+ * the interpreter itself.
+ */
+function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
+    if (platform === 'win32' && child.pid !== undefined) {
+        try {
+            const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+            // taskkill missing or refused: the direct child is still worth killing.
+            killer.on('error', () => child.kill('SIGKILL'));
+            return;
+        } catch {
+            // Fall through to killing the child on its own.
+        }
+    }
+    child.kill('SIGKILL');
+}
+
+/**
  * Find the `hydrust` binary installed in the environment of a Python
  * interpreter, such as one added with `uv add --dev hydrust` or
  * `pip install hydrust`.
@@ -78,11 +101,24 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
  * `timeoutMs` only exists so the tests can make a hang happen quickly, and
  * `platform` so they can exercise the Windows-only shell branch.
  */
-export function findHydrustInInterpreter(
+export async function findHydrustInInterpreter(
     interpreter: string,
     timeoutMs: number = INTERPRETER_LOOKUP_TIMEOUT_MS,
     platform: NodeJS.Platform = process.platform
 ): Promise<InterpreterLookup> {
+    // `-c` puts the working directory first on sys.path, so run
+    // somewhere nobody else can write: neither the workspace, where a
+    // folder named `hydrust` would be imported instead of the installed
+    // package, nor the shared /tmp, where any local user could plant one.
+    // PYTHONSAFEPATH (3.11+) drops that entry altogether.
+    let workingDir: string;
+    try {
+        workingDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'hydrust-lookup-'));
+    } catch (err) {
+        logger.debug(`Could not make a directory to run ${interpreter} in: ${err}`);
+        return COULD_NOT_ASK;
+    }
+
     return new Promise<InterpreterLookup>((resolve) => {
         let settled = false;
         let stdout = '';
@@ -114,33 +150,23 @@ export function findHydrustInInterpreter(
             }
         };
 
+        /**
+         * Answer once, after the private working directory is gone. The
+         * removal is asynchronous: on Windows a grandchild can still hold the
+         * directory, and the retries that waits out must not stall the
+         * extension host, which is single-threaded.
+         */
         const finish = (value: InterpreterLookup) => {
-            if (!settled) {
-                settled = true;
-                resolve(value);
+            if (settled) {
+                return;
             }
-        };
-
-        // `-c` puts the working directory first on sys.path, so run
-        // somewhere nobody else can write: neither the workspace, where a
-        // folder named `hydrust` would be imported instead of the installed
-        // package, nor the shared /tmp, where any local user could plant one.
-        // PYTHONSAFEPATH (3.11+) drops that entry altogether.
-        let workingDir: string;
-        try {
-            workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-lookup-'));
-        } catch (err) {
-            logger.debug(`Could not make a directory to run ${interpreter} in: ${err}`);
-            resolve(COULD_NOT_ASK);
-            return;
-        }
-
-        const cleanUp = () => {
-            try {
-                fs.rmSync(workingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-            } catch {
-                // Nothing useful to do; it is an empty directory in the temp dir.
-            }
+            settled = true;
+            void fs.promises
+                // Nothing useful to do if it fails; it is an empty directory
+                // in the temp dir.
+                .rm(workingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+                .catch(() => undefined)
+                .then(() => resolve(value));
         };
 
         // The answer must come from the selected environment alone, so the
@@ -175,7 +201,6 @@ export function findHydrustInInterpreter(
                     // Only naive quoting is possible here, so a path carrying
                     // any of these could escape into command position.
                     logger.debug(`Not running ${interpreter} through a shell: its path is not safely quotable.`);
-                    cleanUp();
                     finish(COULD_NOT_ASK);
                     return;
                 }
@@ -185,7 +210,6 @@ export function findHydrustInInterpreter(
             }
         } catch (err) {
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
-            cleanUp();
             finish(COULD_NOT_ASK);
             return;
         }
@@ -195,12 +219,11 @@ export function findHydrustInInterpreter(
                 `${interpreter} did not answer within ${timeoutMs}ms when asked where hydrust is installed. ` +
                 'Looking on PATH instead.'
             );
-            child.kill('SIGKILL');
+            killTree(child, platform);
             // A shim that forked the real interpreter leaves a grandchild
             // holding these pipes open, so release them now.
             child.stdout?.destroy();
             child.stderr?.destroy();
-            cleanUp();
             finish(TIMED_OUT);
         }, timeoutMs);
 
@@ -234,13 +257,11 @@ export function findHydrustInInterpreter(
         });
         child.on('error', (err) => {
             clearTimeout(timer);
-            cleanUp();
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
             finish(COULD_NOT_ASK);
         });
         child.on('close', (code, signal) => {
             clearTimeout(timer);
-            cleanUp();
             if (code === null && signal) {
                 // Killed rather than answered, so the environment is still unknown.
                 logger.debug(`${interpreter} was killed by ${signal} when asked where hydrust is installed.`);
