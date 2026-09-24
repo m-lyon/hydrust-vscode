@@ -365,3 +365,38 @@ describe('FEATURE_COMPAT', () => {
         expectNoProblems(problems);
     });
 });
+
+/**
+ * The interpreter lookup imports `find_hydrust_bin` from the `hydrust`
+ * package, a contract that lives in the server repository. A rename there
+ * would make every lookup report `notInstalled` and silently degrade the
+ * extension to a PATH lookup, so check it the same way the tables above are
+ * checked: from the tagged sources themselves.
+ */
+describe('the find_hydrust_bin contract', () => {
+    /** The first server release the extension claims ships it (pythonEnvironment.ts). */
+    const CLAIMED_SINCE = 'v0.5.0';
+
+    function expectExported(tag: string): void {
+        const source = fileAtTag(tag, 'python/hydrust/__init__.py');
+        expect(source, `${tag} has no python/hydrust/__init__.py, so nothing exports find_hydrust_bin`)
+            .toBeDefined();
+        expect(
+            /^def find_hydrust_bin\(/m.test(source!),
+            `${tag} defines no find_hydrust_bin in the hydrust package`
+        ).toBe(true);
+        expect(
+            source!.includes('"find_hydrust_bin"'),
+            `${tag} does not list find_hydrust_bin in the hydrust package's __all__`
+        ).toBe(true);
+    }
+
+    it(`exports it from the hydrust package at ${CLAIMED_SINCE}`, () => {
+        expect(tags, `${CLAIMED_SINCE} is not a released tag`).toContain(CLAIMED_SINCE);
+        expectExported(CLAIMED_SINCE);
+    });
+
+    it('still exports it at the newest released tag', () => {
+        expectExported(tags[tags.length - 1]);
+    });
+});

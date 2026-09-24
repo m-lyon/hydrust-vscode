@@ -705,15 +705,27 @@ describe('looking for a server in the selected Python environment', () => {
         expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
     });
 
-    it('skips a reported binary that is not on disk', async () => {
-        pythonStub.binaries[INTERPRETER] = path.join(scratchDir, 'gone', 'hydrust');
+    it('skips a reported binary that is not on disk, and asks again next time', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const reported = path.join(scratchDir, 'gone', 'hydrust');
+        pythonStub.binaries[INTERPRETER] = reported;
         const onPath = writeBinary('hydrust');
         rememberVersion(onPath, 'v0.5.0');
         whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
 
-        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+        await start(settings);
+        // An answer that pointed at nothing is not remembered, so an install
+        // that lands afterwards is picked up rather than missed all session.
+        fs.mkdirSync(path.dirname(reported), { recursive: true });
+        fs.writeFileSync(reported, 'not a program', { mode: 0o644 });
+        rememberVersion(reported, 'v0.5.0');
+        await start(settings);
 
         expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
+        expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(reported);
     });
 
     it('skips an environment hydrust that is the pre-merge CLI', async () => {
