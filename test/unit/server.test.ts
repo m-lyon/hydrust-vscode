@@ -197,12 +197,6 @@ function rememberVersions(versions: Record<string, string | null>): void {
     stub.globalState.set(PROBE_CACHE_KEY, entries);
 }
 
-/** The fingerprint the caches key a file on. */
-function fingerprintOf(filePath: string): string {
-    const stats = fs.statSync(filePath);
-    return `${filePath}|${Math.round(stats.mtimeMs)}|${stats.size}`;
-}
-
 /** The fingerprint the interpreter cache keys an interpreter on. */
 function interpreterFingerprintOf(interpreterPath: string): string {
     const stats = fs.lstatSync(interpreterPath);

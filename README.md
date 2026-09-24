@@ -76,15 +76,15 @@ The lookup uses the interpreter from `hydrust.pythonInterpreterPath`, or the
 Python extension's active interpreter. The remaining fallbacks listed below are
 applied by the server itself, so no environment lookup happens for them.
 
-Each interpreter is asked only once, since starting one is slow, and its answer
-is remembered across windows and reloads. Installing `hydrust` into an
+Each interpreter is asked once per session, since starting one is slow, and its
+answer is remembered across windows and reloads. Installing `hydrust` into an
 environment that has already been used changes its `bin` (or `Scripts`)
-directory, which is part of what the answer is remembered against, so the next
-start asks it again. That covers the usual virtualenv and conda layouts; for
-anything else, such as a system interpreter with a `pip install --user`, run
-**Hydrust: Restart Server** from the command palette, which always forces the
-question to be asked again. Other restarts, such as a settings change, reuse the earlier
-answer. Only a definitive answer is remembered that
+directory, which is part of what the answer is remembered against, so a new
+window or a reload asks it again. That covers the usual virtualenv and conda
+layouts. Within the current window, and for any other layout, such as a system
+interpreter with a `pip install --user`, run **Hydrust: Restart Server** from
+the command palette, which always forces the question to be asked again. Other
+restarts, such as a settings change, reuse the earlier answer. Only a definitive answer is remembered that
 way: an interpreter that could not be run at all, that reported a path which is
 not on disk, or that has a `hydrust` which could not say where its binary is, is
 asked again on every start, and one that hung is not asked again for the rest of

@@ -80,7 +80,7 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
  * the whole tree on Windows; elsewhere the child leads its own process group
  * (see `detached` below), so the group is signalled instead.
  */
-function killTree(child: ChildProcess, platform: NodeJS.Platform, treeOpen: boolean): void {
+function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
     if (platform === 'win32' && child.pid !== undefined) {
         try {
             const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
@@ -103,12 +103,11 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform, treeOpen: bool
             // forks and exits is exactly the case this exists for — but the
             // pid number stays allocated while it is still in use as a group
             // id, so the signal cannot reach an unrelated group while any
-            // member of this one is alive. `treeOpen` says it is: the tree
-            // still holds the pipes open, so `close` has not fired.
-            if (treeOpen) {
-                process.kill(-child.pid, 'SIGKILL');
-                return;
-            }
+            // member of this one is alive. It is: this only runs from the
+            // timeout, which both `close` and `error` clear, so the tree is
+            // still holding the pipes open here.
+            process.kill(-child.pid, 'SIGKILL');
+            return;
         } catch {
             // Already gone, or not permitted to signal the group: the direct
             // child is still worth killing.
@@ -169,8 +168,10 @@ export async function findHydrustInInterpreter(
          * and all) cannot claim the slot and defeat the real answer.
          */
         const noteMarked = (line: string) => {
-            // Every occurrence, not just the first: marker-carrying noise can
-            // run into the real answer on the same line.
+            // The last absolute segment on the line, not the first:
+            // marker-carrying noise can run into the real answer on the same
+            // line, and the answer is what comes last.
+            let last: string | undefined;
             for (
                 let marker = line.indexOf(BINARY_LINE_PREFIX);
                 marker >= 0;
@@ -183,9 +184,11 @@ export async function findHydrustInInterpreter(
                     .slice(marker + BINARY_LINE_PREFIX.length, next === -1 ? undefined : next)
                     .trim();
                 if (path.isAbsolute(candidate)) {
-                    answer ??= candidate;
-                    return;
+                    last = candidate;
                 }
+            }
+            if (last !== undefined) {
+                answer ??= last;
             }
         };
 
@@ -258,15 +261,13 @@ export async function findHydrustInInterpreter(
         }
 
         let timedOut = false;
-        /** Cleared once the tree has let go of the pipes, so the group is safe to signal until then. */
-        let treeOpen = true;
         const timer = setTimeout(() => {
             timedOut = true;
             logger.warn(
                 `${interpreter} did not answer within ${timeoutMs}ms when asked where hydrust is installed. ` +
                 'Looking on PATH instead.'
             );
-            killTree(child, platform, treeOpen);
+            killTree(child, platform);
             // A shim that forked the real interpreter leaves a grandchild
             // holding these pipes open, so release them now.
             child.stdout?.destroy();
@@ -316,7 +317,6 @@ export async function findHydrustInInterpreter(
             finish(COULD_NOT_ASK);
         });
         child.on('close', (code, signal) => {
-            treeOpen = false;
             clearTimeout(timer);
             if (timedOut) {
                 // The kill below the timer, not an answer.

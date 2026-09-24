@@ -11,6 +11,7 @@ import {
     PROBE_TIMEOUT_MS,
     ResolvedBinary,
     ServerCompat,
+    interpreterFingerprint,
     probeBinaryVersion,
 } from '../../src/common/compat';
 import { FEATURE_PULL_DIAGNOSTICS, FEATURE_WATCHED_FILES } from '../../src/common/compatTable';
@@ -868,5 +869,41 @@ describe('describe()', () => {
         const lines = compat.describe().join('\n');
         expect(lines).toContain('reported by the server');
         expect(lines).toContain('All configured settings are supported by this server.');
+    });
+});
+
+describe('the interpreter fingerprint', () => {
+    /** A Windows conda-style layout: the interpreter at the root, `Scripts` beside it. */
+    function writeCondaEnvironment(): string {
+        const root = path.join(scratchDir, 'condaenv');
+        fs.mkdirSync(path.join(root, 'Scripts'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'Library'), { recursive: true });
+        const interpreter = path.join(root, 'python.exe');
+        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
+        return interpreter;
+    }
+
+    /** Move a directory's mtime on, so the change is visible whatever the filesystem's resolution. */
+    function touchDirectory(dirPath: string): void {
+        const later = new Date(Date.now() + 60_000);
+        fs.utimesSync(dirPath, later, later);
+    }
+
+    it('follows the Scripts directory beside a Windows conda-style interpreter', async () => {
+        const interpreter = writeCondaEnvironment();
+        const before = await interpreterFingerprint(interpreter, 'win32');
+
+        touchDirectory(path.join(path.dirname(interpreter), 'Scripts'));
+
+        expect(await interpreterFingerprint(interpreter, 'win32')).not.toBe(before);
+    });
+
+    it('ignores an unrelated sibling of that Scripts directory', async () => {
+        const interpreter = writeCondaEnvironment();
+        const before = await interpreterFingerprint(interpreter, 'win32');
+
+        touchDirectory(path.join(path.dirname(interpreter), 'Library'));
+
+        expect(await interpreterFingerprint(interpreter, 'win32')).toBe(before);
     });
 });

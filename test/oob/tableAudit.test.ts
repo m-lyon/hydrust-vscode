@@ -380,12 +380,16 @@ describe('the find_hydrust_bin contract', () => {
     function expectExports(source: string | undefined, where: string): void {
         expect(source, `${where} has no python/hydrust/__init__.py, so nothing exports find_hydrust_bin`)
             .toBeDefined();
+        // Defined there, or imported into it from a submodule: either way
+        // `from hydrust import find_hydrust_bin` resolves, which is the whole
+        // contract the extension depends on.
         expect(
-            /^def find_hydrust_bin\(/m.test(source!),
-            `${where} defines no find_hydrust_bin in the hydrust package`
+            /^def find_hydrust_bin\(/m.test(source!) || /^from\s+\S+\s+import\b[^\n]*\bfind_hydrust_bin\b/m.test(source!),
+            `${where} neither defines nor imports find_hydrust_bin in the hydrust package`
         ).toBe(true);
+        const all = /__all__\s*=\s*[[(][^\])]*[\])]/.exec(source!)?.[0] ?? '';
         expect(
-            source!.includes('"find_hydrust_bin"'),
+            /['"]find_hydrust_bin['"]/.test(all),
             `${where} does not list find_hydrust_bin in the hydrust package's __all__`
         ).toBe(true);
     }

@@ -276,7 +276,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
             `printf "${BINARY_LINE_PREFIX}/echoed/shim/line "\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`
         );
 
-        expect(await lookUpPath(interpreter)).not.toContain(BINARY_LINE_PREFIX);
+        expect(await lookUpPath(interpreter)).toBe('/venv/bin/hydrust');
     });
 
     it('ignores marker-carrying noise printed before the answer', async () => {

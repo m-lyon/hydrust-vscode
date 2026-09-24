@@ -73,9 +73,12 @@ async function binaryFingerprint(binaryPath: string): Promise<string | undefined
  * the `Scripts` beside it on Windows when there is one, otherwise the
  * interpreter's own directory.
  */
-async function scriptsDirectory(interpreterPath: string): Promise<{ mtimeMs: number }> {
+async function scriptsDirectory(
+    interpreterPath: string,
+    platform: NodeJS.Platform = process.platform
+): Promise<{ mtimeMs: number }> {
     const own = path.dirname(interpreterPath);
-    if (process.platform === 'win32') {
+    if (platform === 'win32') {
         try {
             const beside = await fs.stat(path.join(own, 'Scripts'));
             if (beside.isDirectory()) {
@@ -103,12 +106,15 @@ async function scriptsDirectory(interpreterPath: string): Promise<{ mtimeMs: num
  * system interpreter with a `pip install --user`) is not noticed; **Hydrust:
  * Restart Server** is the answer there.
  */
-export async function interpreterFingerprint(interpreterPath: string): Promise<string | undefined> {
+export async function interpreterFingerprint(
+    interpreterPath: string,
+    platform: NodeJS.Platform = process.platform
+): Promise<string | undefined> {
     try {
         const stats = await fs.lstat(interpreterPath);
         let scripts = '';
         try {
-            const dir = await scriptsDirectory(interpreterPath);
+            const dir = await scriptsDirectory(interpreterPath, platform);
             scripts = `|${Math.round(dir.mtimeMs)}`;
         } catch (err) {
             logger.debug(`Could not stat the scripts directory of ${interpreterPath} for the interpreter cache: ${err}`);
