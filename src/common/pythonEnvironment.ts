@@ -324,6 +324,11 @@ export async function findHydrustInInterpreter(
         // across a chunk boundary must not decode to replacement characters.
         child.stdout?.setEncoding('utf8');
         child.stderr?.setEncoding('utf8');
+        // A pipe whose peer was just killed can fail on the read side; that
+        // carries nothing the lookup needs, so swallow it rather than let it
+        // surface as an uncaught exception.
+        child.stdout?.on('error', () => undefined);
+        child.stderr?.on('error', () => undefined);
         child.stdout?.on('data', (chunk: string) => {
             // Pick the answer out as it arrives: output from an atexit hook or
             // a .pth file, before or after it, cannot then push it out of the
@@ -356,8 +361,11 @@ export async function findHydrustInInterpreter(
                 classify(line);
             }
             if (stderrPending.length > LINE_LIMIT) {
+                // Classify the runaway line once, then drop it rather than
+                // rescan the same retained tail on every later chunk. The
+                // regexes only ever latch a flag, so nothing is lost.
                 classify(stderrPending);
-                stderrPending = stderrPending.slice(-LINE_LIMIT);
+                stderrPending = '';
             }
         });
         child.on('error', (err) => {

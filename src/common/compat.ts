@@ -180,6 +180,11 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
         // setEncoding, not per-chunk toString: a multi-byte character split
         // across a chunk boundary must not decode to replacement characters.
         child.stdout?.setEncoding('utf8');
+        // A pipe whose peer was just killed can fail on the read side; that
+        // carries nothing the probe needs, so swallow it rather than let it
+        // surface as an uncaught exception.
+        child.stdout?.on('error', () => undefined);
+        child.stderr?.on('error', () => undefined);
         child.stdout?.on('data', (chunk: string) => {
             // Keep the head: the version is parsed from the first match, so a
             // binary that follows its version line with noise must not lose it.
