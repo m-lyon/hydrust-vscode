@@ -80,9 +80,12 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
  * A shim (a Windows `.bat`/`.cmd` run through cmd.exe, or a conda/poetry-style
  * wrapper script that forks rather than execs) makes the real interpreter a
  * grandchild that would survive a kill of the shim alone, holding the lookup's
- * working directory and stdio open for the rest of the session. taskkill takes
- * the whole tree on Windows; elsewhere the child leads its own process group
- * (see `detached` below), so the group is signalled instead.
+ * working directory and stdio open for the rest of the session. Elsewhere the
+ * child leads its own process group (see `detached` below), so the group is
+ * signalled and reaches a forked grandchild even once the child itself is gone.
+ * Windows has no equivalent here: taskkill /T walks the live parent-PID links,
+ * so a grandchild whose direct parent has already exited is missed and survives
+ * (a Win32 Job Object would be the fix, and needs a native addon).
  */
 function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
     if (platform === 'win32' && child.pid !== undefined) {
@@ -256,6 +259,11 @@ export async function findHydrustInInterpreter(
         );
         env.PYTHONIOENCODING = 'utf-8';
         env.PYTHONSAFEPATH = '1';
+        // stdout is a pipe, so CPython block-buffers it and a short path would
+        // sit unflushed until interpreter shutdown. Unbuffered output makes the
+        // answer readable the moment it is printed, which is what lets a lookup
+        // that later hangs still be salvaged.
+        env.PYTHONUNBUFFERED = '1';
         const options = {
             cwd: workingDir,
             // A path is printed, so make sure a non-ASCII one survives a
