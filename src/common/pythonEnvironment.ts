@@ -279,8 +279,8 @@ export async function findHydrustInInterpreter(
                 if (SHELL_UNSAFE.test(interpreter)) {
                     // Only naive quoting is possible here, so a path carrying
                     // any of these could escape into command position.
-                    logger.debug(`Not running ${interpreter} through a shell: its path is not safely quotable.`);
                     finish(COULD_NOT_ASK);
+                    logSafe('debug', `Not running ${interpreter} through a shell: its path is not safely quotable.`);
                     return;
                 }
                 child = spawn(`"${interpreter}" -c "${FIND_BINARY_SCRIPT}"`, { ...options, shell: true });
@@ -288,8 +288,8 @@ export async function findHydrustInInterpreter(
                 child = spawn(interpreter, ['-c', FIND_BINARY_SCRIPT], options);
             }
         } catch (err) {
-            logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
             finish(COULD_NOT_ASK);
+            logSafe('debug', `Could not run ${interpreter} to look for hydrust: ${err}`);
             return;
         }
 
