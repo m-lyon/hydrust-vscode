@@ -23,12 +23,6 @@ let pendingRun: Promise<void> | undefined;
 let deactivating = false;
 
 /**
- * The interpreter the last run used, so a restart can forget what that one
- * reported without discarding the answers other windows rely on.
- */
-let lastInterpreter: string | undefined;
-
-/**
  * Server information
  */
 interface ServerInfo {
@@ -54,7 +48,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // extension is activated again without the module being reloaded.
     deactivating = false;
     pendingRun = undefined;
-    lastInterpreter = undefined;
     void forgetServerLookups();
 
     const serverInfo = loadServerDefaults();
@@ -96,10 +89,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (deactivating) {
             return;
         }
-        if (forgetLookupsNext) {
-            forgetLookupsNext = false;
-            await forgetServerLookups(context, lastInterpreter);
-        }
         try {
             if (lsClient) {
                 await stopServer(lsClient);
@@ -123,7 +112,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 }
             }
 
-            lastInterpreter = settings.interpreter;
+            if (forgetLookupsNext) {
+                forgetLookupsNext = false;
+                await forgetServerLookups(context, settings.interpreter);
+            }
 
             const started = await startServer(
                 settings,

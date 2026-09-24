@@ -93,7 +93,7 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
             // Absolute path: a bare name is resolved against the current
             // directory before PATH, which the extension host does not control.
             const taskkill = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe');
-            const killer = spawn(taskkill, ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+            const killer = spawn(taskkill, ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
             // taskkill missing, or run but refused (an elevated or protected
             // process): the direct child is still worth killing.
             killer.on('error', () => child.kill('SIGKILL'));
