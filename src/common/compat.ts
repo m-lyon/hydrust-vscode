@@ -181,7 +181,11 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
         // across a chunk boundary must not decode to replacement characters.
         child.stdout?.setEncoding('utf8');
         child.stdout?.on('data', (chunk: string) => {
-            stdout = (stdout + chunk).slice(-PROBE_OUTPUT_LIMIT);
+            // Keep the head: the version is parsed from the first match, so a
+            // binary that follows its version line with noise must not lose it.
+            if (stdout.length < PROBE_OUTPUT_LIMIT) {
+                stdout = (stdout + chunk).slice(0, PROBE_OUTPUT_LIMIT);
+            }
         });
         // Drain stderr as well. Old servers log there on startup and a full pipe
         // would stall the child before the timeout can fire.

@@ -219,7 +219,7 @@ async function lookUpInterpreter(
         return undefined;
     }
     interpreterBinaries.set(interpreter, found);
-    if (fingerprint) {
+    if (fingerprint && !(lookup.kind === 'found' && lookup.timedOut)) {
         await rememberInterpreterLookup(context, fingerprint, found);
     }
     return found;

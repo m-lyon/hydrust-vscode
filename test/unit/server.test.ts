@@ -62,6 +62,7 @@ vi.mock('which', () => ({
  * older tests use, so they resolve exactly as they did before the lookup
  * existed. An Error is thrown from the lookup, 'couldNotAsk' stands for an
  * interpreter that could not be run at all, and 'timedOut' for one that hung.
+ * A 'hung:<path>' answer is an interpreter that hung after printing a path.
  */
 const pythonStub = vi.hoisted(() => ({
     binaries: {} as Record<string, string | Error>,
@@ -80,6 +81,9 @@ vi.mock('../../src/common/pythonEnvironment', () => ({
         }
         if (answer === 'timedOut') {
             return { kind: 'couldNotAsk', timedOut: true };
+        }
+        if (typeof answer === 'string' && answer.startsWith('hung:')) {
+            return { kind: 'found', path: answer.slice('hung:'.length), timedOut: true };
         }
         if (answer === 'brokenInstall') {
             return { kind: 'notInstalled', broken: true };
@@ -868,6 +872,44 @@ describe('looking for a server in the selected Python environment', () => {
         expect(interpreterCache()).toEqual({});
         expect(pythonStub.lookups).toEqual([interpreter]);
         expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('does not ask again for a hang that printed a path that is not on disk', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const interpreter = writeInterpreter('python');
+        pythonStub.binaries[interpreter] = `hung:${path.join(scratchDir, 'gone', 'hydrust')}`;
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
+
+        await start(settings);
+        await start(settings);
+
+        expect(interpreterCache()).toEqual({});
+        expect(pythonStub.lookups).toEqual([interpreter]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('uses a hang\'s path when it is on disk but does not remember it across windows', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const interpreter = writeInterpreter('python');
+        const fromEnv = environmentHydrust();
+        pythonStub.binaries[interpreter] = `hung:${fromEnv}`;
+        rememberVersion(fromEnv, 'v0.5.0');
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
+
+        await start(settings);
+        // A reload drops the session cache but keeps globalState.
+        await forgetServerLookups();
+        await start(settings);
+
+        // A hang says nothing about the environment, so it is never persisted.
+        expect(interpreterCache()).toEqual({});
+        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(fromEnv);
     });
 
     it('falls back to PATH when the environment has no hydrust', async () => {
