@@ -88,7 +88,12 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
  * (a Win32 Job Object would be the fix, and needs a native addon).
  */
 function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
-    if (platform === 'win32' && child.pid !== undefined) {
+    // `exitCode`/`signalCode` still null: the child has not been reaped, so the
+    // pid is still its own. Once reaped, Windows may have handed the number to
+    // an unrelated process, whose whole tree taskkill /T would then take down;
+    // it could not reach an orphaned grandchild anyway.
+    const reaped = child.exitCode !== null || child.signalCode !== null;
+    if (platform === 'win32' && child.pid !== undefined && !reaped) {
         try {
             // Absolute path: a bare name is resolved against the current
             // directory before PATH, which the extension host does not control.

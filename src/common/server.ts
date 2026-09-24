@@ -102,13 +102,26 @@ async function tryRememberInterpreterLookup(
     }
 }
 
-/** Store what an interpreter answered, dropping the oldest entries past the cap. */
+/**
+ * Store what an interpreter answered, dropping the oldest entries past the cap
+ * along with the interpreter's own earlier fingerprints, which every install
+ * into the environment mints anew.
+ */
 async function rememberInterpreterLookup(
     context: vscode.ExtensionContext,
     fingerprint: string,
     found: string | undefined
 ): Promise<void> {
-    await rememberInLruCache(context, INTERPRETER_CACHE_KEY, fingerprint, found ?? null, INTERPRETER_CACHE_LIMIT);
+    // The path is the fingerprint's first field.
+    const interpreter = fingerprint.slice(0, fingerprint.indexOf('|') + 1);
+    await rememberInLruCache(
+        context,
+        INTERPRETER_CACHE_KEY,
+        fingerprint,
+        found ?? null,
+        INTERPRETER_CACHE_LIMIT,
+        interpreter || undefined
+    );
 }
 
 /**

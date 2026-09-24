@@ -277,18 +277,23 @@ async function rememberVersion(
  * keys in insertion order. Reads call this too, so the entry that falls off is
  * the one left untouched the longest rather than the one written the longest
  * ago.
+ *
+ * `dropPrefix` drops any other entry whose key starts with it, so a key that
+ * carries a changing fingerprint leaves no dead entries behind to crowd out
+ * live ones.
  */
 export async function rememberInLruCache(
     context: vscode.ExtensionContext,
     cacheKey: string,
     key: string,
     value: string | null,
-    limit: number
+    limit: number,
+    dropPrefix?: string
 ): Promise<void> {
     const existing = context.globalState.get<Record<string, string | null>>(cacheKey, {});
     const cache: Record<string, string | null> = {};
     for (const [existingKey, existingValue] of Object.entries(existing)) {
-        if (existingKey !== key) {
+        if (existingKey !== key && !(dropPrefix && existingKey.startsWith(dropPrefix))) {
             cache[existingKey] = existingValue;
         }
     }
