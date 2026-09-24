@@ -382,10 +382,12 @@ describe('the find_hydrust_bin contract', () => {
             .toBeDefined();
         // Defined there, or imported into it from a submodule: either way
         // `from hydrust import find_hydrust_bin` resolves, which is the whole
-        // contract the extension depends on.
+        // contract the extension depends on. The name is looked for anywhere
+        // outside a comment, so a parenthesised multi-line import — what a
+        // formatter usually leaves in an `__init__.py` — counts too.
+        const code = source!.replace(/#.*$/gm, '');
         expect(
-            /^def find_hydrust_bin\(/m.test(source!) ||
-                /^\s*from\s+\S+\s+import\b.*\bfind_hydrust_bin\b/m.test(source!),
+            /\bfind_hydrust_bin\b/.test(code),
             `${where} neither defines nor imports find_hydrust_bin in the hydrust package`
         ).toBe(true);
     }

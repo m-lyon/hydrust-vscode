@@ -165,6 +165,22 @@ export async function findHydrustInInterpreter(
         let answer: string | undefined;
         /** Whatever of the current line has arrived so far. */
         let pending = '';
+        /** Whatever of the current stderr line has arrived so far. */
+        let stderrPending = '';
+        /** Set by a traceback saying hydrust is absent from the environment. */
+        let missingModule = false;
+        /** Set by a traceback naming the lookup itself, so hydrust is there but broken. */
+        let brokenLookup = false;
+
+        /** Latch what a line of stderr says, before later output can evict it. */
+        const classify = (line: string) => {
+            if (/No module named '?hydrust'?(?![\w.])/.test(line)) {
+                missingModule = true;
+            }
+            if (/find_hydrust_bin/.test(line)) {
+                brokenLookup = true;
+            }
+        };
 
         /**
          * Take a marked line as the answer, if it carries a usable one. Only
@@ -278,14 +294,17 @@ export async function findHydrustInInterpreter(
                 'Looking on PATH instead.'
             );
             killTree(child, platform);
-            // A shim that forked the real interpreter leaves a grandchild
-            // holding these pipes open, so release them now.
-            child.stdout?.destroy();
-            child.stderr?.destroy();
             // The tree may still hold the working directory as its cwd, so
             // answer from the `close` below once it is gone. The kill can
             // fail outright, though, so do not wait on it for long.
             setTimeout(() => {
+                // A shim that forked the real interpreter leaves a grandchild
+                // holding these pipes open, so release them now. Not above:
+                // output that became readable in the same loop iteration as
+                // the deadline would be thrown away before the `data` handler
+                // could parse the answer out of it.
+                child.stdout?.destroy();
+                child.stderr?.destroy();
                 // Flush a final answer without a trailing newline, the same as
                 // the `close` handler, so a tree that never closes gives the
                 // same result as one that does.
@@ -321,6 +340,18 @@ export async function findHydrustInInterpreter(
         child.stderr?.on('data', (chunk: string) => {
             // Keep the tail: the useful part of a traceback is at the end.
             stderr = (stderr + chunk).slice(-OUTPUT_LIMIT);
+            // Classify it as it arrives, the same as the answer on stdout:
+            // output written after the traceback (an atexit warning, a noisy
+            // wrapper) must not evict the evidence from the capped buffer.
+            const lines = (stderrPending + chunk).split(/\r?\n/);
+            stderrPending = lines.pop() ?? '';
+            for (const line of lines) {
+                classify(line);
+            }
+            if (stderrPending.length > LINE_LIMIT) {
+                classify(stderrPending);
+                stderrPending = stderrPending.slice(-LINE_LIMIT);
+            }
         });
         child.on('error', (err) => {
             clearTimeout(timer);
@@ -348,12 +379,14 @@ export async function findHydrustInInterpreter(
                 return;
             }
             if (code !== 0) {
-                if (/No module named '?hydrust'?(?![\w.])/.test(stderr)) {
+                // A last line without a trailing newline still carries evidence.
+                classify(stderrPending);
+                if (missingModule) {
                     logger.debug(`hydrust is not installed in the environment of ${interpreter}.`);
                     finish(NOT_INSTALLED);
                     return;
                 }
-                if (/find_hydrust_bin/.test(stderr)) {
+                if (brokenLookup) {
                     logger.debug(
                         `${interpreter} has a hydrust that cannot say where its binary is (exit code ${code}): ` +
                         stderr.trim().slice(-OUTPUT_LIMIT)
