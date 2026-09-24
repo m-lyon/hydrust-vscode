@@ -149,17 +149,18 @@ function recheckUnknownOnce(binaryPath: string): boolean {
  * A remembered path that has since gone (a reinstall, a deleted environment)
  * is worth asking about again; anything else it answered stands for the
  * session, apart from a path that is not on disk at all. An interpreter that
- * could not be asked at all is not remembered,
- * so a later start asks it again, except one that hung: every start would
- * otherwise stall for the whole lookup timeout before falling back to PATH.
+ * could not be asked at all is not remembered, so a later start asks it again,
+ * except one that hung: every start would otherwise stall for the whole lookup
+ * timeout before falling back to PATH.
  *
  * A definitive answer is also stored in globalState against the interpreter's
  * path, its own file stats (not the symlink target's) and the state of the
  * directory it lives in, so a new window does not pay the interpreter startup
- * again, while installing hydrust into the environment drops the entry. A hang is only remembered for the
- * session, since it says nothing about the environment, and an installed
- * hydrust that could not say where its binary is is not remembered at all,
- * since fixing that does not change the interpreter the entry is keyed on.
+ * again, while installing hydrust into the environment drops the entry. A hang
+ * is only remembered for the session, since it says nothing about the
+ * environment, and an installed hydrust that could not say where its binary is
+ * is not remembered at all, since fixing that does not change the interpreter
+ * the entry is keyed on.
  * **Hydrust: Restart Server** clears both.
  */
 async function lookUpInterpreter(
@@ -200,10 +201,15 @@ async function lookUpInterpreter(
     }
     const found = lookup.kind === 'found' ? lookup.path : undefined;
     if (found && !(await fsapi.pathExists(found))) {
-        // Not remembered: the interpreter did answer, so the environment has
-        // hydrust and a later start should ask again rather than be stuck on
-        // PATH for the session (a half-finished install, or output that ran
-        // into the answer).
+        if (lookup.kind === 'found' && lookup.timedOut) {
+            // A hang that printed a half-written path: remember the hang, so a
+            // later start does not stall for the whole lookup timeout again.
+            interpreterBinaries.set(interpreter, undefined);
+        }
+        // Otherwise not remembered: the interpreter did answer, so the
+        // environment has hydrust and a later start should ask again rather
+        // than be stuck on PATH for the session (a half-finished install, or
+        // output that ran into the answer).
         logger.warn(`Ignoring ${found}: reported by ${interpreter} but not found on disk.`);
         return undefined;
     }

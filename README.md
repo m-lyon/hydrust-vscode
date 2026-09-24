@@ -84,11 +84,11 @@ window or a reload asks it again. That covers the usual virtualenv and conda
 layouts. Within the current window, and for any other layout, such as a system
 interpreter with a `pip install --user`, run **Hydrust: Restart Server** from
 the command palette, which always forces the question to be asked again. Other
-restarts, such as a settings change, reuse the earlier answer. Only a definitive answer is remembered that
-way: an interpreter that could not be run at all, that reported a path which is
-not on disk, or that has a `hydrust` which could not say where its binary is, is
-asked again on every start, and one that hung is not asked again for the rest of
-the session.
+restarts, such as a settings change, reuse the earlier answer. Only a
+definitive answer is remembered that way: an interpreter that could not be run
+at all, that reported a path which is not on disk, or that has a `hydrust`
+which could not say where its binary is, is asked again on every start, and one
+that hung is not asked again for the rest of the session.
 
 ## Python Environment Detection
 

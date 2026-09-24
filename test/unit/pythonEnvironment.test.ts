@@ -202,6 +202,7 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(await findHydrustInInterpreter(interpreter, 200)).toEqual({
             kind: 'found',
             path: '/venv/bin/hydrust',
+            timedOut: true,
         });
     }, 15000);
 

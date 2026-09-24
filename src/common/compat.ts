@@ -36,6 +36,9 @@ export const PROBE_CACHE_KEY = 'hydrust.serverVersionProbe.v1';
 /** How many probe results to keep. The oldest are dropped past this. */
 export const PROBE_CACHE_LIMIT = 32;
 
+/** Cap on how much `--version` output is kept: a version line is short. */
+const PROBE_OUTPUT_LIMIT = 4096;
+
 /** A server binary the extension has picked out, before it has been started. */
 export interface ResolvedBinary {
     /** Absolute path to the executable. */
@@ -174,8 +177,11 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
             finish(undefined);
         }, timeoutMs);
 
-        child.stdout?.on('data', (chunk: Buffer) => {
-            stdout += chunk.toString();
+        // setEncoding, not per-chunk toString: a multi-byte character split
+        // across a chunk boundary must not decode to replacement characters.
+        child.stdout?.setEncoding('utf8');
+        child.stdout?.on('data', (chunk: string) => {
+            stdout = (stdout + chunk).slice(-PROBE_OUTPUT_LIMIT);
         });
         // Drain stderr as well. Old servers log there on startup and a full pipe
         // would stall the child before the timeout can fire.

@@ -58,7 +58,7 @@ const SHELL_UNSAFE = /["&|^<>%\u0000-\u001f]/;
  * asking again later.
  */
 export type InterpreterLookup =
-    | { kind: 'found'; path: string }
+    | { kind: 'found'; path: string; timedOut?: boolean }
     | { kind: 'notInstalled'; broken?: boolean }
     | { kind: 'couldNotAsk'; timedOut?: boolean };
 
@@ -267,7 +267,7 @@ export async function findHydrustInInterpreter(
         // printed it and exited, with only a forked grandchild holding the
         // pipes open past the deadline.
         const timedOutResult = (): InterpreterLookup =>
-            answer ? { kind: 'found', path: answer } : TIMED_OUT;
+            answer ? { kind: 'found', path: answer, timedOut: true } : TIMED_OUT;
         const timer = setTimeout(() => {
             timedOut = true;
             logger.warn(
