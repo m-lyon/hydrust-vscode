@@ -81,6 +81,9 @@ vi.mock('../../src/common/pythonEnvironment', () => ({
         if (answer === 'timedOut') {
             return { kind: 'couldNotAsk', timedOut: true };
         }
+        if (answer === 'brokenInstall') {
+            return { kind: 'notInstalled', broken: true };
+        }
         return answer ? { kind: 'found', path: answer } : { kind: 'notInstalled' };
     },
 }));
@@ -140,7 +143,12 @@ vi.mock('vscode-languageclient/node', () => {
     return { LanguageClient, State: { Stopped: 1, Starting: 3, Running: 2 } };
 });
 
-import { forgetInterpreterLookups, startServer } from '../../src/common/server';
+import {
+    INTERPRETER_CACHE_KEY,
+    INTERPRETER_CACHE_LIMIT,
+    forgetInterpreterLookups,
+    startServer,
+} from '../../src/common/server';
 import { PROBE_CACHE_KEY } from '../../src/common/compat';
 import { getVersionedDir } from '../../src/common/constants';
 import { versionLastUsedKey } from '../../src/common/download';
@@ -187,6 +195,24 @@ function rememberVersions(versions: Record<string, string | null>): void {
         entries[`${binaryPath}|${Math.round(stats.mtimeMs)}|${stats.size}`] = version;
     }
     stub.globalState.set(PROBE_CACHE_KEY, entries);
+}
+
+/** The fingerprint the caches key a file on. */
+function fingerprintOf(filePath: string): string {
+    const stats = fs.statSync(filePath);
+    return `${filePath}|${Math.round(stats.mtimeMs)}|${stats.size}`;
+}
+
+/** Whatever is currently in the interpreter lookup cache. */
+function interpreterCache(): Record<string, string | null> {
+    return (stub.globalState.get(INTERPRETER_CACHE_KEY) as Record<string, string | null>) ?? {};
+}
+
+/** An interpreter on disk, so it has a fingerprint to be remembered against. */
+function writeInterpreter(name: string): string {
+    const interpreter = path.join(scratchDir, name);
+    fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
+    return interpreter;
 }
 
 /** Settings with everything at its default, bar the overrides given. */
@@ -241,7 +267,7 @@ beforeEach(() => {
     whichStub.paths = {};
     pythonStub.binaries = {};
     pythonStub.lookups = [];
-    forgetInterpreterLookups();
+    void forgetInterpreterLookups();
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
     outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
@@ -635,7 +661,7 @@ describe('looking for a server in the selected Python environment', () => {
         const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
 
         await start(settings);
-        forgetInterpreterLookups();
+        await forgetInterpreterLookups();
         const fromEnv = environmentHydrust();
         rememberVersion(fromEnv, 'v0.5.0');
         await start(settings);
@@ -657,7 +683,7 @@ describe('looking for a server in the selected Python environment', () => {
 
         await start(settings);
         // A reload drops the session cache but keeps globalState.
-        forgetInterpreterLookups();
+        await forgetInterpreterLookups();
         await start(settings);
 
         expect(pythonStub.lookups).toEqual([interpreter]);
@@ -675,10 +701,82 @@ describe('looking for a server in the selected Python environment', () => {
         const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
 
         await start(settings);
-        forgetInterpreterLookups(context as unknown as vscode.ExtensionContext);
+        await forgetInterpreterLookups(context as unknown as vscode.ExtensionContext);
         await start(settings);
 
         expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
+    });
+
+    it('asks again for an installed hydrust that could not say where its binary is', async () => {
+        // A half-finished install is not the environment's final answer, so it
+        // must not be remembered against the interpreter for every window.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const interpreter = writeInterpreter('python');
+        pythonStub.binaries[interpreter] = 'brokenInstall';
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
+
+        await start(settings);
+        // A reload drops the session cache but keeps globalState.
+        await forgetInterpreterLookups();
+        await start(settings);
+
+        expect(interpreterCache()).toEqual({});
+        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('drops the oldest remembered interpreters once the cache is full', async () => {
+        // Every environment rebuild makes a new fingerprint, so without a cap
+        // the cache would keep one dead entry per interpreter ever selected.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const seeded: Record<string, string | null> = {};
+        for (let index = 0; index < INTERPRETER_CACHE_LIMIT; index += 1) {
+            seeded[`/old/python-${index}|1|2`] = null;
+        }
+        stub.globalState.set(INTERPRETER_CACHE_KEY, seeded);
+        const interpreter = writeInterpreter('python');
+        const fromEnv = environmentHydrust();
+        pythonStub.binaries[interpreter] = fromEnv;
+        rememberVersion(fromEnv, 'v0.5.0');
+
+        await start(settingsFor('', { interpreter, serverVersion: '0.4.0' }));
+
+        const cache = interpreterCache();
+        expect(Object.keys(cache)).toHaveLength(INTERPRETER_CACHE_LIMIT);
+        expect(Object.keys(cache)).not.toContain('/old/python-0|1|2');
+        expect(cache[`/old/python-${INTERPRETER_CACHE_LIMIT - 1}|1|2`]).toBeNull();
+        expect(cache[fingerprintOf(interpreter)]).toBe(fromEnv);
+    });
+
+    it('keeps an interpreter that is still in use out of the way of the cap', async () => {
+        // The daily driver is the oldest entry by write time, so a cache that
+        // only reordered on writes would drop it and ask it again.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const interpreter = writeInterpreter('python');
+        const fromEnv = environmentHydrust();
+        pythonStub.binaries[interpreter] = fromEnv;
+        rememberVersion(fromEnv, 'v0.5.0');
+        const seeded: Record<string, string | null> = { [fingerprintOf(interpreter)]: fromEnv };
+        for (let index = 0; index < INTERPRETER_CACHE_LIMIT - 1; index += 1) {
+            seeded[`/old/python-${index}|1|2`] = null;
+        }
+        stub.globalState.set(INTERPRETER_CACHE_KEY, seeded);
+
+        // Read the old interpreter, then fill the last free slot with another.
+        await start(settingsFor('', { interpreter, serverVersion: '0.4.0' }));
+        const newcomer = writeInterpreter('other-python');
+        pythonStub.binaries[newcomer] = fromEnv;
+        await forgetInterpreterLookups();
+        await start(settingsFor('', { interpreter: newcomer, serverVersion: '0.4.0' }));
+
+        const cache = interpreterCache();
+        expect(Object.keys(cache)).toHaveLength(INTERPRETER_CACHE_LIMIT);
+        expect(cache[fingerprintOf(interpreter)]).toBe(fromEnv);
+        expect(Object.keys(cache)).not.toContain('/old/python-0|1|2');
+        expect(pythonStub.lookups).toEqual([newcomer]);
     });
 
     it('asks again when the interpreter could not be run at all', async () => {

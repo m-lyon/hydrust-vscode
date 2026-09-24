@@ -55,10 +55,17 @@ const SHELL_UNSAFE = /["&|^<>%]/;
  */
 export type InterpreterLookup =
     | { kind: 'found'; path: string }
-    | { kind: 'notInstalled' }
+    | { kind: 'notInstalled'; broken?: boolean }
     | { kind: 'couldNotAsk'; timedOut?: boolean };
 
 const NOT_INSTALLED: InterpreterLookup = { kind: 'notInstalled' };
+/**
+ * A hydrust that is installed but could not say where its binary is (a
+ * half-finished install, an unreadable scripts directory). Told apart so the
+ * answer is not remembered across windows: fixing the environment does not
+ * change the interpreter the cache is keyed on.
+ */
+const BROKEN_INSTALL: InterpreterLookup = { kind: 'notInstalled', broken: true };
 const COULD_NOT_ASK: InterpreterLookup = { kind: 'couldNotAsk' };
 /** An interpreter that hung. Told apart so the caller need not stall on it again. */
 const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
@@ -322,7 +329,7 @@ export async function findHydrustInInterpreter(
                         `${interpreter} has a hydrust that cannot say where its binary is (exit code ${code}): ` +
                         stderr.trim().slice(-OUTPUT_LIMIT)
                     );
-                    finish(NOT_INSTALLED);
+                    finish(BROKEN_INSTALL);
                     return;
                 }
                 // The interpreter never got as far as answering, so the

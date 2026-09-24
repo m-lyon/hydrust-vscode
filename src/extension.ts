@@ -48,7 +48,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // extension is activated again without the module being reloaded.
     deactivating = false;
     pendingRun = undefined;
-    forgetInterpreterLookups();
+    void forgetInterpreterLookups();
 
     const serverInfo = loadServerDefaults();
     const serverName = serverInfo.name;
@@ -174,7 +174,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
         registerCommand(`${serverId}.restart`, async () => {
             logger.info('Restart command triggered');
-            forgetInterpreterLookups(context);
+            await forgetInterpreterLookups(context);
             await runServer();
         }),
         registerCommand(`${serverId}.showLogs`, () => {

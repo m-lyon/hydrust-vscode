@@ -50,17 +50,21 @@ const interpreterBinaries = new Map<string, string | undefined>();
 export const INTERPRETER_CACHE_KEY = 'hydrust.interpreterLookup.v1';
 
 /** How many interpreter answers to keep. The oldest are dropped past this. */
-const INTERPRETER_CACHE_LIMIT = 16;
+export const INTERPRETER_CACHE_LIMIT = 16;
 
 /**
  * Forget what the interpreters reported, so the next start asks them again.
  * The stored answers go too when a context is given, since a window reload is
  * not what the user runs after installing hydrust into the environment.
  */
-export function forgetInterpreterLookups(context?: vscode.ExtensionContext): void {
+export async function forgetInterpreterLookups(context?: vscode.ExtensionContext): Promise<void> {
     interpreterBinaries.clear();
     if (context) {
-        void context.globalState.update(INTERPRETER_CACHE_KEY, {});
+        try {
+            await context.globalState.update(INTERPRETER_CACHE_KEY, {});
+        } catch (err) {
+            logger.warn(`Could not forget what the interpreters reported: ${err}`);
+        }
     }
 }
 
@@ -148,7 +152,9 @@ function recheckUnknownOnce(binaryPath: string): boolean {
  * A definitive answer is also stored in globalState against the interpreter's
  * path and file stats, so a new window does not pay the interpreter startup
  * again. A hang is only remembered for the session, since it says nothing
- * about the environment. **Hydrust: Restart Server** clears both.
+ * about the environment, and neither is an installed hydrust that could not say
+ * where its binary is, since fixing that does not change the interpreter the
+ * entry is keyed on. **Hydrust: Restart Server** clears both.
  */
 async function lookUpInterpreter(
     interpreter: string,
@@ -191,7 +197,7 @@ async function lookUpInterpreter(
         return undefined;
     }
     interpreterBinaries.set(interpreter, found);
-    if (fingerprint) {
+    if (fingerprint && !(lookup.kind === 'notInstalled' && lookup.broken)) {
         await rememberInterpreterLookup(context, fingerprint, found);
     }
     return found;
