@@ -228,7 +228,14 @@ export async function findHydrustInInterpreter(
                 .rm(workingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
                 // Nothing useful to do if it fails; it is an empty directory
                 // in the temp dir, but a leak should be diagnosable.
-                .catch((err) => logger.debug(`Could not remove ${workingDir}: ${err}`))
+                .catch((err) => {
+                    try {
+                        logger.debug(`Could not remove ${workingDir}: ${err}`);
+                    } catch {
+                        // A disposed log channel throws; losing the line must
+                        // not leave the lookup unsettled.
+                    }
+                })
                 .then(() => resolve(value));
         };
 
@@ -357,6 +364,9 @@ export async function findHydrustInInterpreter(
             clearTimeout(timer);
             if (timedOut) {
                 // A failed kill below the timer, not a failure to run.
+                // Anything already printed is still worth using, the same as
+                // in `close`.
+                noteMarked(pending);
                 finish(timedOutResult());
                 return;
             }

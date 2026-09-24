@@ -359,7 +359,9 @@ describe.skipIf(!python3 || isWindows)('the lookup script, run by a real python3
             'def find_hydrust_bin():\n    return "/other/bin/hydrust"\n'
         );
         process.env.PYTHONPATH = site;
-        const interpreter = fakeInterpreter(`exec "${python3}" "$@"`);
+        // `-S` skips site-packages but still honours PYTHONPATH, so a hydrust
+        // installed on the machine running the tests cannot leak in.
+        const interpreter = fakeInterpreter(`exec "${python3}" -S "$@"`);
 
         expect(await lookUpPath(interpreter)).toBeUndefined();
     });
