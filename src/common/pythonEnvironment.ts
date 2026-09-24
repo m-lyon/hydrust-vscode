@@ -193,11 +193,8 @@ export async function findHydrustInInterpreter(
             // marker-carrying noise can run into the real answer on the same
             // line, and the answer is what comes last.
             let last: string | undefined;
-            for (
-                let marker = line.indexOf(BINARY_LINE_PREFIX);
-                marker >= 0;
-                marker = line.indexOf(BINARY_LINE_PREFIX, marker + BINARY_LINE_PREFIX.length)
-            ) {
+            let marker = line.indexOf(BINARY_LINE_PREFIX);
+            while (marker >= 0) {
                 // Stop at the next marker: a marked segment must not swallow
                 // the segment that follows it, which may be the real answer.
                 const next = line.indexOf(BINARY_LINE_PREFIX, marker + BINARY_LINE_PREFIX.length);
@@ -207,6 +204,7 @@ export async function findHydrustInInterpreter(
                 if (path.isAbsolute(candidate)) {
                     last = candidate;
                 }
+                marker = next;
             }
             if (last !== undefined) {
                 answer ??= last;
@@ -294,6 +292,7 @@ export async function findHydrustInInterpreter(
         // pipes open past the deadline.
         const timedOutResult = (): InterpreterLookup =>
             answer ? { kind: 'found', path: answer, timedOut: true } : TIMED_OUT;
+        let graceTimer: NodeJS.Timeout | undefined;
         const timer = setTimeout(() => {
             timedOut = true;
             logger.warn(
@@ -304,7 +303,7 @@ export async function findHydrustInInterpreter(
             // The tree may still hold the working directory as its cwd, so
             // answer from the `close` below once it is gone. The kill can
             // fail outright, though, so do not wait on it for long.
-            setTimeout(() => {
+            graceTimer = setTimeout(() => {
                 // A shim that forked the real interpreter leaves a grandchild
                 // holding these pipes open, so release them now. Not above:
                 // output that became readable in the same loop iteration as
@@ -370,6 +369,7 @@ export async function findHydrustInInterpreter(
         });
         child.on('error', (err) => {
             clearTimeout(timer);
+            clearTimeout(graceTimer);
             if (timedOut) {
                 // A failed kill below the timer, not a failure to run.
                 // Anything already printed is still worth using, the same as
@@ -383,6 +383,7 @@ export async function findHydrustInInterpreter(
         });
         child.on('close', (code, signal) => {
             clearTimeout(timer);
+            clearTimeout(graceTimer);
             if (timedOut) {
                 // The kill below the timer, so the exit status says nothing;
                 // anything already printed is still worth using.

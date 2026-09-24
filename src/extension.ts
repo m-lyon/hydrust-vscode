@@ -23,6 +23,12 @@ let pendingRun: Promise<void> | undefined;
 let deactivating = false;
 
 /**
+ * The interpreter the last run used, so a restart can forget what that one
+ * reported without discarding the answers other windows rely on.
+ */
+let lastInterpreter: string | undefined;
+
+/**
  * Server information
  */
 interface ServerInfo {
@@ -48,6 +54,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // extension is activated again without the module being reloaded.
     deactivating = false;
     pendingRun = undefined;
+    lastInterpreter = undefined;
     void forgetServerLookups();
 
     const serverInfo = loadServerDefaults();
@@ -107,6 +114,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                     logger.info('No Python interpreter found, Hydrust will attempt to auto-detect one.');
                 }
             }
+
+            lastInterpreter = settings.interpreter;
 
             const started = await startServer(
                 settings,
@@ -174,7 +183,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
         registerCommand(`${serverId}.restart`, async () => {
             logger.info('Restart command triggered');
-            await forgetServerLookups(context);
+            await forgetServerLookups(context, lastInterpreter);
             await runServer();
         }),
         registerCommand(`${serverId}.showLogs`, () => {

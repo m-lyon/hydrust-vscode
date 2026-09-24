@@ -706,7 +706,7 @@ describe('looking for a server in the selected Python environment', () => {
         const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
 
         await start(settings);
-        await forgetServerLookups(context as unknown as vscode.ExtensionContext);
+        await forgetServerLookups(context as unknown as vscode.ExtensionContext, interpreter);
         await start(settings);
 
         expect(pythonStub.lookups).toEqual([interpreter, interpreter]);

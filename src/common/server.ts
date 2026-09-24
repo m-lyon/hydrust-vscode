@@ -56,18 +56,34 @@ export const INTERPRETER_CACHE_LIMIT = 16;
  * Forget what the interpreters reported, so the next start asks them again,
  * along with the once-per-session `--version` recheck of binaries whose
  * version is remembered as unknown, so a restart re-probes those too. The
- * stored interpreter answers go too when a context is given, since a window
- * reload is not what the user runs after installing hydrust into the
- * environment.
+ * stored answers go too when a context is given, since a window reload is not
+ * what the user runs after installing hydrust into the environment. Only the
+ * given interpreter's stored answers are dropped, though: globalState is
+ * shared, so clearing it all would make every other open window pay the
+ * interpreter startup cost again for an environment the user did not touch.
  */
-export async function forgetServerLookups(context?: vscode.ExtensionContext): Promise<void> {
+export async function forgetServerLookups(
+    context?: vscode.ExtensionContext,
+    interpreter?: string
+): Promise<void> {
     interpreterBinaries.clear();
     recheckedUnknown.clear();
-    if (context) {
+    if (context && interpreter) {
         try {
-            await context.globalState.update(INTERPRETER_CACHE_KEY, {});
+            const existing = context.globalState.get<Record<string, string | null>>(INTERPRETER_CACHE_KEY, {});
+            // Matched on the path, not the whole fingerprint: installing
+            // hydrust changes the mtimes the fingerprint carries, so the entry
+            // to drop no longer has the key the interpreter would hash to now.
+            const prefix = `${interpreter}|`;
+            const cache: Record<string, string | null> = {};
+            for (const [key, value] of Object.entries(existing)) {
+                if (!key.startsWith(prefix)) {
+                    cache[key] = value;
+                }
+            }
+            await context.globalState.update(INTERPRETER_CACHE_KEY, cache);
         } catch (err) {
-            logger.warn(`Could not forget what the interpreters reported: ${err}`);
+            logger.warn(`Could not forget what ${interpreter} reported: ${err}`);
         }
     }
 }
