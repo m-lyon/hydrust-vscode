@@ -13,6 +13,9 @@ import { logger } from './logger';
  */
 export const INTERPRETER_LOOKUP_TIMEOUT_MS = 5000;
 
+/** How long a killed interpreter is given to die before the answer goes out anyway. */
+const KILL_GRACE_MS = 1000;
+
 /** Marks the answer, so output from anything else in the interpreter cannot be mistaken for it. */
 export const BINARY_LINE_PREFIX = 'HYDRUST_BIN:';
 
@@ -73,8 +76,14 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
     if (platform === 'win32' && child.pid !== undefined) {
         try {
             const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-            // taskkill missing or refused: the direct child is still worth killing.
+            // taskkill missing, or run but refused (an elevated or protected
+            // process): the direct child is still worth killing.
             killer.on('error', () => child.kill('SIGKILL'));
+            killer.on('close', (code) => {
+                if (code !== 0) {
+                    child.kill('SIGKILL');
+                }
+            });
             return;
         } catch {
             // Fall through to killing the child on its own.
@@ -162,10 +171,10 @@ export async function findHydrustInInterpreter(
             }
             settled = true;
             void fs.promises
-                // Nothing useful to do if it fails; it is an empty directory
-                // in the temp dir.
                 .rm(workingDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-                .catch(() => undefined)
+                // Nothing useful to do if it fails; it is an empty directory
+                // in the temp dir, but a leak should be diagnosable.
+                .catch((err) => logger.debug(`Could not remove ${workingDir}: ${err}`))
                 .then(() => resolve(value));
         };
 
@@ -214,7 +223,9 @@ export async function findHydrustInInterpreter(
             return;
         }
 
+        let timedOut = false;
         const timer = setTimeout(() => {
+            timedOut = true;
             logger.warn(
                 `${interpreter} did not answer within ${timeoutMs}ms when asked where hydrust is installed. ` +
                 'Looking on PATH instead.'
@@ -224,7 +235,10 @@ export async function findHydrustInInterpreter(
             // holding these pipes open, so release them now.
             child.stdout?.destroy();
             child.stderr?.destroy();
-            finish(TIMED_OUT);
+            // The tree may still hold the working directory as its cwd, so
+            // answer from the `close` below once it is gone. The kill can
+            // fail outright, though, so do not wait on it for long.
+            setTimeout(() => finish(TIMED_OUT), KILL_GRACE_MS).unref();
         }, timeoutMs);
 
         // setEncoding, not per-chunk toString: a multi-byte character split
@@ -262,6 +276,11 @@ export async function findHydrustInInterpreter(
         });
         child.on('close', (code, signal) => {
             clearTimeout(timer);
+            if (timedOut) {
+                // The kill below the timer, not an answer.
+                finish(TIMED_OUT);
+                return;
+            }
             if (code === null && signal) {
                 // Killed rather than answered, so the environment is still unknown.
                 logger.debug(`${interpreter} was killed by ${signal} when asked where hydrust is installed.`);

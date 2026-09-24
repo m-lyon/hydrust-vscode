@@ -178,6 +178,20 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(lookupDirs()).toEqual(before);
     });
 
+    it('kills the tree when a Windows lookup does not answer in time', async () => {
+        const interpreter = fakeInterpreter(`sleep 10\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`);
+
+        const before = lookupDirs();
+        const started = Date.now();
+        // taskkill is missing off Windows, so this also covers the fallback kill.
+        expect(await findHydrustInInterpreter(interpreter, 200, 'win32')).toEqual({
+            kind: 'couldNotAsk',
+            timedOut: true,
+        });
+        expect(Date.now() - started).toBeLessThan(5000);
+        expect(lookupDirs()).toEqual(before);
+    });
+
     it('runs in a private directory, so nothing else can be first on sys.path', async () => {
         const interpreter = fakeInterpreter(`echo "${BINARY_LINE_PREFIX}$(pwd)"`);
 
