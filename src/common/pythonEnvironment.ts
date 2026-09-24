@@ -43,8 +43,12 @@ const OUTPUT_LIMIT = 4096;
  */
 const LINE_LIMIT = 64 * 1024;
 
-/** Characters cmd.exe acts on that double quotes do not reliably contain. */
-const SHELL_UNSAFE = /["&|^<>%]/;
+/**
+ * Characters cmd.exe acts on that double quotes do not reliably contain.
+ * Control characters are included because a bare newline in a `/c` command
+ * line separates commands.
+ */
+const SHELL_UNSAFE = /["&|^<>%\u0000-\u001f]/;
 
 /**
  * What an interpreter had to say. `notInstalled` is a definitive answer from

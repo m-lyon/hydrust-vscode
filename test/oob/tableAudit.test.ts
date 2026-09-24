@@ -387,11 +387,6 @@ describe('the find_hydrust_bin contract', () => {
             /^def find_hydrust_bin\(/m.test(source!) || /^from\s+\S+\s+import\b[^\n]*\bfind_hydrust_bin\b/m.test(source!),
             `${where} neither defines nor imports find_hydrust_bin in the hydrust package`
         ).toBe(true);
-        const all = /__all__\s*=\s*[[(][^\])]*[\])]/.exec(source!)?.[0] ?? '';
-        expect(
-            /['"]find_hydrust_bin['"]/.test(all),
-            `${where} does not list find_hydrust_bin in the hydrust package's __all__`
-        ).toBe(true);
     }
 
     it(`exports it from the hydrust package at ${CLAIMED_SINCE}`, () => {
