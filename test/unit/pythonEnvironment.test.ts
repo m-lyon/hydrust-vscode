@@ -187,6 +187,24 @@ describe.skipIf(isWindows)('reading the interpreter\'s answer', () => {
         expect(fs.existsSync(sentinel)).toBe(false);
     }, 15000);
 
+    it('kills a grandchild an interpreter that exited immediately left behind', async () => {
+        const sentinel = path.join(scratchDir, 'forked-grandchild-ran');
+        const interpreter = fakeInterpreter(`(sleep 2 && touch "${sentinel}") &`);
+
+        expect(await findHydrustInInterpreter(interpreter, 200)).toEqual({ kind: 'couldNotAsk', timedOut: true });
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        expect(fs.existsSync(sentinel)).toBe(false);
+    }, 15000);
+
+    it('uses an answer already printed when something else holds the pipes past the deadline', async () => {
+        const interpreter = fakeInterpreter(`echo ${BINARY_LINE_PREFIX}/venv/bin/hydrust\n(sleep 10) &`);
+
+        expect(await findHydrustInInterpreter(interpreter, 200)).toEqual({
+            kind: 'found',
+            path: '/venv/bin/hydrust',
+        });
+    }, 15000);
+
     it('kills the tree when a Windows lookup does not answer in time', async () => {
         const interpreter = fakeInterpreter(`sleep 10\necho ${BINARY_LINE_PREFIX}/venv/bin/hydrust`);
 

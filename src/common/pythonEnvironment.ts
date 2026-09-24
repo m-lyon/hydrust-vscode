@@ -84,7 +84,7 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
  * the whole tree on Windows; elsewhere the child leads its own process group
  * (see `detached` below), so the group is signalled instead.
  */
-function killTree(child: ChildProcess, platform: NodeJS.Platform, childExited: boolean): void {
+function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
     if (platform === 'win32' && child.pid !== undefined) {
         try {
             const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
@@ -100,13 +100,14 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform, childExited: b
         } catch {
             // Fall through to killing the child on its own.
         }
-    } else if (child.pid !== undefined && !childExited) {
+    } else if (child.pid !== undefined) {
         try {
-            // Negative pid: the whole group the detached child leads. Only
-            // while the child itself is alive, so the pid is still allocated:
-            // once it has been reaped the number is free to be reused, and a
-            // grandchild that left the group (a wrapper that calls setsid)
-            // would leave the signal to land on an unrelated group.
+            // Negative pid: the whole group the detached child leads. Signalled
+            // even once the child itself has been reaped, which is exactly the
+            // case this is for: a wrapper that forks the real interpreter and
+            // exits immediately leaves the grandchild behind. The pid number
+            // stays allocated while any process still has it as its group, so
+            // the signal cannot land on an unrelated group.
             process.kill(-child.pid, 'SIGKILL');
             return;
         } catch {
@@ -262,17 +263,18 @@ export async function findHydrustInInterpreter(
         }
 
         let timedOut = false;
-        let exited = false;
-        child.on('exit', () => {
-            exited = true;
-        });
+        // An answer already read is still an answer: the interpreter may have
+        // printed it and exited, with only a forked grandchild holding the
+        // pipes open past the deadline.
+        const timedOutResult = (): InterpreterLookup =>
+            answer ? { kind: 'found', path: answer } : TIMED_OUT;
         const timer = setTimeout(() => {
             timedOut = true;
             logger.warn(
                 `${interpreter} did not answer within ${timeoutMs}ms when asked where hydrust is installed. ` +
                 'Looking on PATH instead.'
             );
-            killTree(child, platform, exited);
+            killTree(child, platform);
             // A shim that forked the real interpreter leaves a grandchild
             // holding these pipes open, so release them now.
             child.stdout?.destroy();
@@ -280,7 +282,7 @@ export async function findHydrustInInterpreter(
             // The tree may still hold the working directory as its cwd, so
             // answer from the `close` below once it is gone. The kill can
             // fail outright, though, so do not wait on it for long.
-            setTimeout(() => finish(TIMED_OUT), KILL_GRACE_MS).unref();
+            setTimeout(() => finish(timedOutResult()), KILL_GRACE_MS).unref();
         }, timeoutMs);
 
         // setEncoding, not per-chunk toString: a multi-byte character split
@@ -315,7 +317,7 @@ export async function findHydrustInInterpreter(
             clearTimeout(timer);
             if (timedOut) {
                 // A failed kill below the timer, not a failure to run.
-                finish(TIMED_OUT);
+                finish(timedOutResult());
                 return;
             }
             logger.debug(`Could not run ${interpreter} to look for hydrust: ${err}`);
@@ -324,8 +326,10 @@ export async function findHydrustInInterpreter(
         child.on('close', (code, signal) => {
             clearTimeout(timer);
             if (timedOut) {
-                // The kill below the timer, not an answer.
-                finish(TIMED_OUT);
+                // The kill below the timer, so the exit status says nothing;
+                // anything already printed is still worth using.
+                noteMarked(pending);
+                finish(timedOutResult());
                 return;
             }
             if (code === null && signal) {
