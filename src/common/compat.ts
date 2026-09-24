@@ -253,31 +253,53 @@ export async function probeBinaryVersion(
  *
  * The fingerprint changes every time the binary is replaced, so without a cap
  * the cache would collect one dead entry per upgrade and keep it for the life
- * of the install. Entries are rewritten in order with the one just used last,
- * and anything past the cap falls off the front. Reads call this too, so the
- * binary that falls off is the one left untouched the longest rather than the
- * one written the longest ago.
+ * of the install.
  */
 async function rememberVersion(
     context: vscode.ExtensionContext,
     fingerprint: string,
     version: ServerVersion | undefined
 ): Promise<void> {
-    const existing = context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {});
+    await rememberInLruCache(
+        context,
+        PROBE_CACHE_KEY,
+        fingerprint,
+        version ? formatServerVersion(version) : null,
+        PROBE_CACHE_LIMIT
+    );
+}
+
+/**
+ * Store `value` against `key` in a capped globalState cache.
+ *
+ * Entries are rewritten in order with the one just used last, and anything
+ * past the cap falls off the front; this relies on a JSON object keeping its
+ * keys in insertion order. Reads call this too, so the entry that falls off is
+ * the one left untouched the longest rather than the one written the longest
+ * ago.
+ */
+export async function rememberInLruCache(
+    context: vscode.ExtensionContext,
+    cacheKey: string,
+    key: string,
+    value: string | null,
+    limit: number
+): Promise<void> {
+    const existing = context.globalState.get<Record<string, string | null>>(cacheKey, {});
     const cache: Record<string, string | null> = {};
-    for (const [key, value] of Object.entries(existing)) {
-        if (key !== fingerprint) {
-            cache[key] = value;
+    for (const [existingKey, existingValue] of Object.entries(existing)) {
+        if (existingKey !== key) {
+            cache[existingKey] = existingValue;
         }
     }
-    cache[fingerprint] = version ? formatServerVersion(version) : null;
+    cache[key] = value;
 
     const keys = Object.keys(cache);
-    for (const stale of keys.slice(0, Math.max(0, keys.length - PROBE_CACHE_LIMIT))) {
+    for (const stale of keys.slice(0, Math.max(0, keys.length - limit))) {
         delete cache[stale];
     }
 
-    await context.globalState.update(PROBE_CACHE_KEY, cache);
+    await context.globalState.update(cacheKey, cache);
 }
 
 /** True when the two configuration values should be treated as the same. */

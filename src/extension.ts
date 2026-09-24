@@ -88,9 +88,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return pendingRun;
     };
 
+    // Set by the restart command and acted on inside the queued run, so a
+    // start still in flight cannot re-seed the caches after they are cleared.
+    let forgetLookupsNext = false;
+
     const doRunServer = async () => {
         if (deactivating) {
             return;
+        }
+        if (forgetLookupsNext) {
+            forgetLookupsNext = false;
+            await forgetServerLookups(context, lastInterpreter);
         }
         try {
             if (lsClient) {
@@ -183,7 +191,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
         registerCommand(`${serverId}.restart`, async () => {
             logger.info('Restart command triggered');
-            await forgetServerLookups(context, lastInterpreter);
+            forgetLookupsNext = true;
             await runServer();
         }),
         registerCommand(`${serverId}.showLogs`, () => {

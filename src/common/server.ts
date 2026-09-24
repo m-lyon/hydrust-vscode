@@ -15,7 +15,7 @@ import {
 } from './compatTable';
 import { ExtensionSettings } from './settings';
 import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
-import { ResolvedBinary, ServerCompat, interpreterFingerprint, probeBinaryVersion } from './compat';
+import { ResolvedBinary, ServerCompat, interpreterFingerprint, probeBinaryVersion, rememberInLruCache } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
 import { findHydrustInInterpreter } from './pythonEnvironment';
@@ -108,21 +108,7 @@ async function rememberInterpreterLookup(
     fingerprint: string,
     found: string | undefined
 ): Promise<void> {
-    const existing = context.globalState.get<Record<string, string | null>>(INTERPRETER_CACHE_KEY, {});
-    const cache: Record<string, string | null> = {};
-    for (const [key, value] of Object.entries(existing)) {
-        if (key !== fingerprint) {
-            cache[key] = value;
-        }
-    }
-    cache[fingerprint] = found ?? null;
-
-    const keys = Object.keys(cache);
-    for (const stale of keys.slice(0, Math.max(0, keys.length - INTERPRETER_CACHE_LIMIT))) {
-        delete cache[stale];
-    }
-
-    await context.globalState.update(INTERPRETER_CACHE_KEY, cache);
+    await rememberInLruCache(context, INTERPRETER_CACHE_KEY, fingerprint, found ?? null, INTERPRETER_CACHE_LIMIT);
 }
 
 /**
