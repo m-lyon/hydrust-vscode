@@ -80,7 +80,7 @@ const TIMED_OUT: InterpreterLookup = { kind: 'couldNotAsk', timedOut: true };
  * the whole tree on Windows; elsewhere the child leads its own process group
  * (see `detached` below), so the group is signalled instead.
  */
-function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
+function killTree(child: ChildProcess, platform: NodeJS.Platform, treeOpen: boolean): void {
     if (platform === 'win32' && child.pid !== undefined) {
         try {
             const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
@@ -98,10 +98,14 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
         }
     } else if (child.pid !== undefined) {
         try {
-            // Negative pid: the whole group the detached child leads. Node
-            // does not guard this form against a reaped child, so the pid is
-            // only used while the child is known to be live.
-            if (child.exitCode === null && child.signalCode === null) {
+            // Negative pid: the whole group the detached child leads. The
+            // direct child may already have been reaped here — a shim that
+            // forks and exits is exactly the case this exists for — but the
+            // pid number stays allocated while it is still in use as a group
+            // id, so the signal cannot reach an unrelated group while any
+            // member of this one is alive. `treeOpen` says it is: the tree
+            // still holds the pipes open, so `close` has not fired.
+            if (treeOpen) {
                 process.kill(-child.pid, 'SIGKILL');
                 return;
             }
@@ -254,13 +258,15 @@ export async function findHydrustInInterpreter(
         }
 
         let timedOut = false;
+        /** Cleared once the tree has let go of the pipes, so the group is safe to signal until then. */
+        let treeOpen = true;
         const timer = setTimeout(() => {
             timedOut = true;
             logger.warn(
                 `${interpreter} did not answer within ${timeoutMs}ms when asked where hydrust is installed. ` +
                 'Looking on PATH instead.'
             );
-            killTree(child, platform);
+            killTree(child, platform, treeOpen);
             // A shim that forked the real interpreter leaves a grandchild
             // holding these pipes open, so release them now.
             child.stdout?.destroy();
@@ -310,6 +316,7 @@ export async function findHydrustInInterpreter(
             finish(COULD_NOT_ASK);
         });
         child.on('close', (code, signal) => {
+            treeOpen = false;
             clearTimeout(timer);
             if (timedOut) {
                 // The kill below the timer, not an answer.

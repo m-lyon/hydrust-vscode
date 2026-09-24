@@ -69,25 +69,49 @@ async function binaryFingerprint(binaryPath: string): Promise<string | undefined
 }
 
 /**
+ * Stats of the directory hydrust's script would land in for an interpreter:
+ * the `Scripts` beside it on Windows when there is one, otherwise the
+ * interpreter's own directory.
+ */
+async function scriptsDirectory(interpreterPath: string): Promise<{ mtimeMs: number }> {
+    const own = path.dirname(interpreterPath);
+    if (process.platform === 'win32') {
+        try {
+            const beside = await fs.stat(path.join(own, 'Scripts'));
+            if (beside.isDirectory()) {
+                return beside;
+            }
+        } catch {
+            // No such directory: a venv, where the interpreter is already in `Scripts`.
+        }
+    }
+    return fs.stat(own);
+}
+
+/**
  * Build the cache key for an interpreter. Unlike `binaryFingerprint` this
  * does not follow symlinks: a venv's `bin/python` is normally a symlink to
  * the base interpreter, and stats taken through it would not change when the
  * venv is deleted and rebuilt at the same path.
  *
- * The directory holding the interpreter (`bin`, or `Scripts` on Windows) goes
- * in too: installing hydrust into the environment drops a script in there, so
- * a remembered "not installed" for that environment stops being used as soon
- * as it is installed.
+ * The environment's scripts directory goes in too: installing hydrust drops a
+ * script in there, so a remembered "not installed" for that environment stops
+ * being used as soon as it is installed. That is the directory holding the
+ * interpreter (`bin`, or `Scripts` in a Windows venv), or the `Scripts` beside
+ * it in a Windows conda-style layout where the interpreter sits at the root of
+ * the environment. A layout that installs scripts somewhere else again (a
+ * system interpreter with a `pip install --user`) is not noticed; **Hydrust:
+ * Restart Server** is the answer there.
  */
 export async function interpreterFingerprint(interpreterPath: string): Promise<string | undefined> {
     try {
         const stats = await fs.lstat(interpreterPath);
         let scripts = '';
         try {
-            const dir = await fs.stat(path.dirname(interpreterPath));
+            const dir = await scriptsDirectory(interpreterPath);
             scripts = `|${Math.round(dir.mtimeMs)}`;
         } catch (err) {
-            logger.debug(`Could not stat the directory of ${interpreterPath} for the interpreter cache: ${err}`);
+            logger.debug(`Could not stat the scripts directory of ${interpreterPath} for the interpreter cache: ${err}`);
         }
         return `${interpreterPath}|${Math.round(stats.mtimeMs)}|${stats.size}${scripts}`;
     } catch (err) {

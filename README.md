@@ -80,8 +80,10 @@ Each interpreter is asked only once, since starting one is slow, and its answer
 is remembered across windows and reloads. Installing `hydrust` into an
 environment that has already been used changes its `bin` (or `Scripts`)
 directory, which is part of what the answer is remembered against, so the next
-start asks it again; **Hydrust: Restart Server** from the command palette also
-forces that. Other restarts, such as a settings change, reuse the earlier
+start asks it again. That covers the usual virtualenv and conda layouts; for
+anything else, such as a system interpreter with a `pip install --user`, run
+**Hydrust: Restart Server** from the command palette, which always forces the
+question to be asked again. Other restarts, such as a settings change, reuse the earlier
 answer. Only a definitive answer is remembered that
 way: an interpreter that could not be run at all, that reported a path which is
 not on disk, or that has a `hydrust` which could not say where its binary is, is

@@ -714,6 +714,56 @@ describe('looking for a server in the selected Python environment', () => {
         expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
     });
 
+    it('asks again once hydrust is installed into an environment already asked about', async () => {
+        // The stored "not installed" is keyed on the environment's scripts
+        // directory, so installing hydrust there retires it by itself.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const envDir = path.join(scratchDir, 'venv', 'bin');
+        fs.mkdirSync(envDir, { recursive: true });
+        const interpreter = path.join(envDir, 'python');
+        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
+
+        await start(settings);
+        expect(interpreterCache()).toEqual({ [interpreterFingerprintOf(interpreter)]: null });
+
+        // Installing hydrust drops its script beside the interpreter.
+        const fromEnv = path.join(envDir, 'hydrust');
+        fs.writeFileSync(fromEnv, 'not a program', { mode: 0o644 });
+        fs.utimesSync(envDir, new Date(), new Date(Date.now() + 5000));
+        pythonStub.binaries[interpreter] = fromEnv;
+        rememberVersions({ [onPath]: 'v0.5.0', [fromEnv]: 'v0.5.0' });
+        await forgetServerLookups();
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
+    });
+
+    it('does not ask again when nothing has been installed into the environment', async () => {
+        // The converse: an untouched environment keeps its stored answer, so
+        // the slow interpreter start is paid once.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const envDir = path.join(scratchDir, 'venv', 'bin');
+        fs.mkdirSync(envDir, { recursive: true });
+        const interpreter = path.join(envDir, 'python');
+        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
+
+        await start(settings);
+        await forgetServerLookups();
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([interpreter]);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
+    });
+
     it('asks again for an installed hydrust that could not say where its binary is', async () => {
         // A half-finished install is not the environment's final answer, so it
         // must not be remembered against the interpreter for every window.
@@ -766,7 +816,10 @@ describe('looking for a server in the selected Python environment', () => {
         const fromEnv = environmentHydrust();
         pythonStub.binaries[interpreter] = fromEnv;
         rememberVersion(fromEnv, 'v0.5.0');
-        const seeded: Record<string, string | null> = { [interpreterFingerprintOf(interpreter)]: fromEnv };
+        // Taken before the newcomer is written: that changes the mtime of the
+        // directory they share, which the fingerprint covers.
+        const key = interpreterFingerprintOf(interpreter);
+        const seeded: Record<string, string | null> = { [key]: fromEnv };
         for (let index = 0; index < INTERPRETER_CACHE_LIMIT - 1; index += 1) {
             seeded[`/old/python-${index}|1|2`] = null;
         }
@@ -781,7 +834,7 @@ describe('looking for a server in the selected Python environment', () => {
 
         const cache = interpreterCache();
         expect(Object.keys(cache)).toHaveLength(INTERPRETER_CACHE_LIMIT);
-        expect(cache[interpreterFingerprintOf(interpreter)]).toBe(fromEnv);
+        expect(cache[key]).toBe(fromEnv);
         expect(Object.keys(cache)).not.toContain('/old/python-0|1|2');
         expect(pythonStub.lookups).toEqual([newcomer]);
     });
