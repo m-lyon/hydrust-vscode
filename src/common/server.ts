@@ -92,11 +92,12 @@ export async function forgetServerLookups(
  * not change which server is chosen. */
 async function tryRememberInterpreterLookup(
     context: vscode.ExtensionContext,
+    interpreter: string,
     fingerprint: string,
     found: string | undefined
 ): Promise<void> {
     try {
-        await rememberInterpreterLookup(context, fingerprint, found);
+        await rememberInterpreterLookup(context, interpreter, fingerprint, found);
     } catch (err) {
         logger.warn(`Could not remember what an interpreter reported: ${err}`);
     }
@@ -109,18 +110,21 @@ async function tryRememberInterpreterLookup(
  */
 async function rememberInterpreterLookup(
     context: vscode.ExtensionContext,
+    interpreter: string,
     fingerprint: string,
     found: string | undefined
 ): Promise<void> {
-    // The path is the fingerprint's first field.
-    const interpreter = fingerprint.slice(0, fingerprint.indexOf('|') + 1);
+    // Built from the known path rather than recovered from the fingerprint: a
+    // path may itself contain the `|` the fields are joined with, so scanning
+    // for the first one can end the prefix mid-path and drop the answers of
+    // unrelated interpreters that share it.
     await rememberInLruCache(
         context,
         INTERPRETER_CACHE_KEY,
         fingerprint,
         found ?? null,
         INTERPRETER_CACHE_LIMIT,
-        interpreter || undefined
+        `${interpreter}|`
     );
 }
 
@@ -215,7 +219,7 @@ async function lookUpInterpreter(
                 // Rewrite it so an interpreter still in use keeps its place.
                 // Skipped when it is already the newest entry, so the common
                 // case does not write to persisted storage on every start.
-                await tryRememberInterpreterLookup(context, fingerprint, remembered);
+                await tryRememberInterpreterLookup(context, interpreter, fingerprint, remembered);
             }
             return remembered;
         }
@@ -249,7 +253,7 @@ async function lookUpInterpreter(
     }
     interpreterBinaries.set(interpreter, found);
     if (fingerprint && !(lookup.kind === 'found' && lookup.timedOut)) {
-        await tryRememberInterpreterLookup(context, fingerprint, found);
+        await tryRememberInterpreterLookup(context, interpreter, fingerprint, found);
     }
     return found;
 }

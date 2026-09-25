@@ -111,9 +111,13 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform): void {
         } catch {
             // Fall through to killing the child on its own.
         }
-    } else if (child.pid !== undefined) {
+    } else if (platform !== 'win32' && child.pid !== undefined) {
         try {
-            // Negative pid: the whole group the detached child leads. Signalled
+            // Negative pid: the whole group the detached child leads. Windows
+            // has no process groups to signal, and the child is not detached
+            // there, so this is only ever the other platforms: a child already
+            // reaped past a live taskkill-less Windows grandchild falls
+            // straight through to being killed on its own. Signalled
             // even once the child itself has been reaped, which is exactly the
             // case this is for: a wrapper that forks the real interpreter and
             // exits immediately leaves the grandchild behind. The pid number

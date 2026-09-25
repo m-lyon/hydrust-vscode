@@ -770,6 +770,9 @@ describe('looking for a server in the selected Python environment', () => {
 
         expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
         expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
+        // The superseded fingerprint went with it, rather than one dead entry
+        // per install piling up against the cap.
+        expect(Object.keys(interpreterCache())).toEqual([interpreterFingerprintOf(interpreter)]);
     });
 
     it('does not ask again when nothing has been installed into the environment', async () => {
