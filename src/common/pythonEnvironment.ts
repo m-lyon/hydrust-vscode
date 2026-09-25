@@ -9,7 +9,7 @@ import { logger } from './logger';
 export const INTERPRETER_LOOKUP_TIMEOUT_MS = 5000;
 
 /** The script that asks the `hydrust` package where its binary is, relative to the extension root. */
-const FIND_BINARY_SCRIPT = path.join('resources', 'find_hydrust_bin.py');
+const FIND_BINARY_SCRIPT = path.join('bundled', 'tool', 'find_hydrust_bin.py');
 
 /**
  * Find the `hydrust` binary installed in the environment of a Python
