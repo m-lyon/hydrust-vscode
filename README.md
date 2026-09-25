@@ -56,30 +56,6 @@ Displays parameter information as you type, showing parameter names, types, and 
 
 Provides rich syntax highlighting for Hydra `yaml` files, colouring module paths, class & function names, parameter keys, and values with distinct token types.
 
-## Finding the Server
-
-The extension looks for the `hydrust` server in this order:
-
-1. `hydrust.serverPath`, if set
-2. With `hydrust.importStrategy` set to `fromEnvironment` (the default):
-   1. A `hydrust` installed in the selected Python environment, for example with
-      `uv add --dev hydrust` or `pip install hydrust`. The extension asks the
-      interpreter where the package put its binary, so this works even when the
-      environment is not activated and its scripts directory is not on `PATH`.
-      Requires server v0.5.0 or later, the first release published to PyPI.
-   2. `hydrust` (or the older `hydra-lsp`) on `PATH`
-3. A server downloaded by the extension, at `hydrust.serverVersion`
-
-The Python environment wins over `PATH` even when the copy on `PATH` is newer,
-so the editor runs the same version as `hydrust check` in that environment.
-The lookup uses the interpreter from `hydrust.pythonInterpreterPath`, or the
-Python extension's active interpreter. The remaining fallbacks listed below are
-applied by the server itself, so no environment lookup happens for them.
-
-The interpreter is asked on every server start, which costs one Python
-startup. If it fails, hangs for more than 5 seconds, or reports a binary that is
-missing or older than v0.5.0, the extension carries on to `PATH`.
-
 ## Python Environment Detection
 
 Hydrust automatically detects your Python environment using the following priority:

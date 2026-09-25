@@ -3,8 +3,7 @@ import * as path from 'path';
 import { logger } from './logger';
 
 /**
- * How long to wait for the interpreter to answer. A conda or pyenv shim can
- * take a few seconds on a cold start; a healthy answer takes well under one.
+ * How long to wait for the interpreter to answer.
  */
 export const INTERPRETER_LOOKUP_TIMEOUT_MS = 5000;
 
@@ -12,13 +11,11 @@ export const INTERPRETER_LOOKUP_TIMEOUT_MS = 5000;
 const FIND_BINARY_SCRIPT = path.join('bundled', 'tool', 'find_hydrust_bin.py');
 
 /**
- * Find the `hydrust` binary installed in the environment of a Python
- * interpreter, such as one added with `uv add --dev hydrust`.
+ * Find the `hydrust` binary installed in the environment of a Python interpreter.
  *
- * That environment's scripts directory is often not on the extension host's
- * PATH (VS Code opened from a launcher rather than an activated shell), so the
- * interpreter is asked instead, through the same `find_hydrust_bin()` that
- * `python -m hydrust` uses. It ships in the `hydrust` wheel from server v0.5.0.
+ * That environment's scripts directory may not be on the extension host's
+ * PATH (VSCode opened from a launcher rather than an activated shell), so the
+ * interpreter is asked instead.
  *
  * Resolves to the absolute path reported, or undefined when hydrust is not
  * installed or the interpreter could not be asked. Never rejects.

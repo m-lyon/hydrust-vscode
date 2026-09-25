@@ -6,4 +6,3 @@ dist
 *.log
 
 dev-docs/
-bundled/libs/

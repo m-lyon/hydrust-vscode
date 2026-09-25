@@ -2,8 +2,7 @@
 
 Prints nothing when the package is not installed. Run as a script rather than
 with `-c`, so `sys.path` starts with this directory instead of the working
-directory, where a workspace folder named `hydrust` would be imported in place
-of the installed package.
+directory.
 """
 
 import os

@@ -86,14 +86,7 @@ function recheckUnknownOnce(binaryPath: string): boolean {
 }
 
 /**
- * Look for a hydrust installed in the selected Python environment, for example
- * by `uv add --dev hydrust`. Resolves to undefined whenever that does not give a
- * usable server, so the caller can carry on to PATH: in particular for every
- * environment without the `hydrust` package, which includes every server before
- * v0.5.0, since none was published to PyPI.
- *
- * The binary it reports is checked the same way as one on PATH: it has to
- * exist and report v0.5.0 or later.
+ * Look for a hydrust installed in the selected Python environment.
  */
 async function findInPythonEnvironment(
     interpreter: string,
@@ -162,9 +155,7 @@ async function findBinaryPath(
 
     // 2. Use environment if explicitly requested
     if (settings.importStrategy === 'fromEnvironment') {
-        // 2a. The selected Python environment. Its hydrust wins over one on
-        // PATH even when that one is newer: it is the version the project
-        // pinned, and the one `hydrust check` in that environment would run.
+        // 2a. The selected Python environment.
         if (settings.interpreter) {
             try {
                 const fromPython = await findInPythonEnvironment(settings.interpreter, context, probeTimeoutMs);
