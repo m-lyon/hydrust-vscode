@@ -60,35 +60,17 @@ vi.mock('which', () => ({
  * What each Python interpreter reports as its hydrust binary. An interpreter
  * that is not listed has no hydrust installed, which is every interpreter the
  * older tests use, so they resolve exactly as they did before the lookup
- * existed. An Error is thrown from the lookup, 'couldNotAsk' stands for an
- * interpreter that could not be run at all, and 'timedOut' for one that hung.
- * A 'hung:<path>' answer is an interpreter that hung after printing a path.
+ * existed.
  */
 const pythonStub = vi.hoisted(() => ({
-    binaries: {} as Record<string, string | Error>,
+    binaries: {} as Record<string, string>,
     lookups: [] as string[],
 }));
 
 vi.mock('../../src/common/pythonEnvironment', () => ({
     findHydrustInInterpreter: async (interpreter: string) => {
         pythonStub.lookups.push(interpreter);
-        const answer = pythonStub.binaries[interpreter];
-        if (answer instanceof Error) {
-            throw answer;
-        }
-        if (answer === 'couldNotAsk') {
-            return { kind: 'couldNotAsk' };
-        }
-        if (answer === 'timedOut') {
-            return { kind: 'couldNotAsk', timedOut: true };
-        }
-        if (typeof answer === 'string' && answer.startsWith('hung:')) {
-            return { kind: 'found', path: answer.slice('hung:'.length), timedOut: true };
-        }
-        if (answer === 'brokenInstall') {
-            return { kind: 'notInstalled', broken: true };
-        }
-        return answer ? { kind: 'found', path: answer } : { kind: 'notInstalled' };
+        return pythonStub.binaries[interpreter];
     },
 }));
 
@@ -147,12 +129,7 @@ vi.mock('vscode-languageclient/node', () => {
     return { LanguageClient, State: { Stopped: 1, Starting: 3, Running: 2 } };
 });
 
-import {
-    INTERPRETER_CACHE_KEY,
-    INTERPRETER_CACHE_LIMIT,
-    forgetServerLookups,
-    startServer,
-} from '../../src/common/server';
+import { startServer } from '../../src/common/server';
 import { PROBE_CACHE_KEY } from '../../src/common/compat';
 import { getVersionedDir } from '../../src/common/constants';
 import { versionLastUsedKey } from '../../src/common/download';
@@ -199,25 +176,6 @@ function rememberVersions(versions: Record<string, string | null>): void {
         entries[`${binaryPath}|${Math.round(stats.mtimeMs)}|${stats.size}`] = version;
     }
     stub.globalState.set(PROBE_CACHE_KEY, entries);
-}
-
-/** The fingerprint the interpreter cache keys an interpreter on. */
-function interpreterFingerprintOf(interpreterPath: string): string {
-    const stats = fs.lstatSync(interpreterPath);
-    const dir = fs.statSync(path.dirname(interpreterPath));
-    return `${interpreterPath}|${Math.round(stats.mtimeMs)}|${stats.size}|${Math.round(dir.mtimeMs)}`;
-}
-
-/** Whatever is currently in the interpreter lookup cache. */
-function interpreterCache(): Record<string, string | null> {
-    return (stub.globalState.get(INTERPRETER_CACHE_KEY) as Record<string, string | null>) ?? {};
-}
-
-/** An interpreter on disk, so it has a fingerprint to be remembered against. */
-function writeInterpreter(name: string): string {
-    const interpreter = path.join(scratchDir, name);
-    fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
-    return interpreter;
 }
 
 /** Settings with everything at its default, bar the overrides given. */
@@ -272,7 +230,6 @@ beforeEach(() => {
     whichStub.paths = {};
     pythonStub.binaries = {};
     pythonStub.lookups = [];
-    void forgetServerLookups();
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
     outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
@@ -610,342 +567,6 @@ describe('looking for a server in the selected Python environment', () => {
         expect(started.compat).toBeDefined();
     });
 
-    it('asks the interpreter once, not on every restart', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const fromEnv = environmentHydrust();
-        rememberVersion(fromEnv, 'v0.5.0');
-        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
-
-        await start(settings);
-        await start(settings);
-
-        expect(pythonStub.lookups).toEqual([INTERPRETER]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
-    });
-
-    it('asks again when a remembered binary has gone', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const fromEnv = environmentHydrust();
-        rememberVersion(fromEnv, 'v0.5.0');
-        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
-
-        await start(settings);
-        fs.rmSync(fromEnv);
-        delete pythonStub.binaries[INTERPRETER];
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        await start(settings);
-
-        expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
-    });
-
-    it('does not ask again for an interpreter with no hydrust', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
-
-        await start(settings);
-        await start(settings);
-
-        expect(pythonStub.lookups).toEqual([INTERPRETER]);
-    });
-
-    it('asks again after a restart, so a newly installed hydrust is found', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
-
-        await start(settings);
-        await forgetServerLookups();
-        const fromEnv = environmentHydrust();
-        rememberVersion(fromEnv, 'v0.5.0');
-        await start(settings);
-
-        expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
-    });
-
-    it('remembers the answer across windows, so a reload does not ask again', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        // Stored against the interpreter's file stats, so it has to be on disk.
-        const interpreter = path.join(scratchDir, 'python');
-        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
-        const fromEnv = environmentHydrust();
-        pythonStub.binaries[interpreter] = fromEnv;
-        rememberVersion(fromEnv, 'v0.5.0');
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        // A reload drops the session cache but keeps globalState.
-        await forgetServerLookups();
-        await start(settings);
-
-        expect(pythonStub.lookups).toEqual([interpreter]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
-    });
-
-    it('asks again after a restart even though the answer was stored', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const interpreter = path.join(scratchDir, 'python');
-        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
-        const fromEnv = environmentHydrust();
-        pythonStub.binaries[interpreter] = fromEnv;
-        rememberVersion(fromEnv, 'v0.5.0');
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        await forgetServerLookups(context as unknown as vscode.ExtensionContext, interpreter);
-        await start(settings);
-
-        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
-    });
-
-    it('forgets only the given interpreter, so other windows keep their answers', async () => {
-        clientStub.initializeResult = initializeResult('0.5.0');
-        // Separate directories: the fingerprint covers the directory's mtime,
-        // so writing one interpreter must not retire the other's entry.
-        const dirA = path.join(scratchDir, 'envA');
-        const dirB = path.join(scratchDir, 'envB');
-        fs.mkdirSync(dirA, { recursive: true });
-        fs.mkdirSync(dirB, { recursive: true });
-        const interpreterA = path.join(dirA, 'python');
-        const interpreterB = path.join(dirB, 'python');
-        fs.writeFileSync(interpreterA, 'not a program', { mode: 0o755 });
-        fs.writeFileSync(interpreterB, 'not a program', { mode: 0o755 });
-        const fromEnv = environmentHydrust();
-        pythonStub.binaries[interpreterA] = fromEnv;
-        pythonStub.binaries[interpreterB] = fromEnv;
-        rememberVersion(fromEnv, 'v0.5.0');
-        const keyA = interpreterFingerprintOf(interpreterA);
-        const keyB = interpreterFingerprintOf(interpreterB);
-        stub.globalState.set(INTERPRETER_CACHE_KEY, { [keyA]: fromEnv, [keyB]: fromEnv });
-
-        await forgetServerLookups(asExtensionContext(context), interpreterA);
-
-        expect(Object.keys(interpreterCache())).toEqual([keyB]);
-
-        // B's answer is still stored, so starting for it asks nothing.
-        await start(settingsFor('', { interpreter: interpreterB, serverVersion: '0.4.0' }));
-
-        expect(pythonStub.lookups).toEqual([]);
-        expect(clientStub.clients[0].serverOptions.run.command).toBe(fromEnv);
-    });
-
-    it('asks again once hydrust is installed into an environment already asked about', async () => {
-        // The stored "not installed" is keyed on the environment's scripts
-        // directory, so installing hydrust there retires it by itself.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const envDir = path.join(scratchDir, 'venv', 'bin');
-        fs.mkdirSync(envDir, { recursive: true });
-        const interpreter = path.join(envDir, 'python');
-        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        expect(interpreterCache()).toEqual({ [interpreterFingerprintOf(interpreter)]: null });
-
-        // Installing hydrust drops its script beside the interpreter.
-        const fromEnv = path.join(envDir, 'hydrust');
-        fs.writeFileSync(fromEnv, 'not a program', { mode: 0o644 });
-        fs.utimesSync(envDir, new Date(), new Date(Date.now() + 5000));
-        pythonStub.binaries[interpreter] = fromEnv;
-        rememberVersions({ [onPath]: 'v0.5.0', [fromEnv]: 'v0.5.0' });
-        await forgetServerLookups();
-        await start(settings);
-
-        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
-        // The superseded fingerprint went with it, rather than one dead entry
-        // per install piling up against the cap.
-        expect(Object.keys(interpreterCache())).toEqual([interpreterFingerprintOf(interpreter)]);
-    });
-
-    it('does not ask again when nothing has been installed into the environment', async () => {
-        // The converse: an untouched environment keeps its stored answer, so
-        // the slow interpreter start is paid once.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const envDir = path.join(scratchDir, 'venv', 'bin');
-        fs.mkdirSync(envDir, { recursive: true });
-        const interpreter = path.join(envDir, 'python');
-        fs.writeFileSync(interpreter, 'not a program', { mode: 0o755 });
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        await forgetServerLookups();
-        await start(settings);
-
-        expect(pythonStub.lookups).toEqual([interpreter]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
-    });
-
-    it('asks again for an installed hydrust that could not say where its binary is', async () => {
-        // A half-finished install is not the environment's final answer, so it
-        // must not be remembered against the interpreter for every window.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const interpreter = writeInterpreter('python');
-        pythonStub.binaries[interpreter] = 'brokenInstall';
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        // A reload drops the session cache but keeps globalState.
-        await forgetServerLookups();
-        await start(settings);
-
-        expect(interpreterCache()).toEqual({});
-        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
-    });
-
-    it('drops the oldest remembered interpreters once the cache is full', async () => {
-        // Every interpreter ever selected takes a slot, so without a cap the
-        // cache would grow without bound.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const seeded: Record<string, string | null> = {};
-        for (let index = 0; index < INTERPRETER_CACHE_LIMIT; index += 1) {
-            seeded[`/old/python-${index}|1|2`] = null;
-        }
-        stub.globalState.set(INTERPRETER_CACHE_KEY, seeded);
-        const interpreter = writeInterpreter('python');
-        const fromEnv = environmentHydrust();
-        pythonStub.binaries[interpreter] = fromEnv;
-        rememberVersion(fromEnv, 'v0.5.0');
-
-        await start(settingsFor('', { interpreter, serverVersion: '0.4.0' }));
-
-        const cache = interpreterCache();
-        expect(Object.keys(cache)).toHaveLength(INTERPRETER_CACHE_LIMIT);
-        expect(Object.keys(cache)).not.toContain('/old/python-0|1|2');
-        expect(cache[`/old/python-${INTERPRETER_CACHE_LIMIT - 1}|1|2`]).toBeNull();
-        expect(cache[interpreterFingerprintOf(interpreter)]).toBe(fromEnv);
-    });
-
-    it('keeps an interpreter that is still in use out of the way of the cap', async () => {
-        // The daily driver is the oldest entry by write time, so a cache that
-        // only reordered on writes would drop it and ask it again.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const interpreter = writeInterpreter('python');
-        const fromEnv = environmentHydrust();
-        pythonStub.binaries[interpreter] = fromEnv;
-        rememberVersion(fromEnv, 'v0.5.0');
-        // Taken before the newcomer is written: that changes the mtime of the
-        // directory they share, which the fingerprint covers.
-        const key = interpreterFingerprintOf(interpreter);
-        const seeded: Record<string, string | null> = { [key]: fromEnv };
-        for (let index = 0; index < INTERPRETER_CACHE_LIMIT - 1; index += 1) {
-            seeded[`/old/python-${index}|1|2`] = null;
-        }
-        stub.globalState.set(INTERPRETER_CACHE_KEY, seeded);
-
-        // Read the old interpreter, then fill the last free slot with another.
-        await start(settingsFor('', { interpreter, serverVersion: '0.4.0' }));
-        const newcomer = writeInterpreter('other-python');
-        pythonStub.binaries[newcomer] = fromEnv;
-        await forgetServerLookups();
-        await start(settingsFor('', { interpreter: newcomer, serverVersion: '0.4.0' }));
-
-        const cache = interpreterCache();
-        expect(Object.keys(cache)).toHaveLength(INTERPRETER_CACHE_LIMIT);
-        expect(cache[key]).toBe(fromEnv);
-        expect(Object.keys(cache)).not.toContain('/old/python-0|1|2');
-        expect(pythonStub.lookups).toEqual([newcomer]);
-    });
-
-    it('asks again when the interpreter could not be run at all', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const interpreter = writeInterpreter('python');
-        pythonStub.binaries[interpreter] = 'couldNotAsk';
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        await start(settings);
-
-        expect(interpreterCache()).toEqual({});
-        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
-    });
-
-    it('does not ask again for an interpreter that hung, so the stall is paid once', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const interpreter = writeInterpreter('python');
-        pythonStub.binaries[interpreter] = 'timedOut';
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        await start(settings);
-
-        // A hang says nothing about the environment, so it is never persisted.
-        expect(interpreterCache()).toEqual({});
-        expect(pythonStub.lookups).toEqual([interpreter]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
-    });
-
-    it('does not ask again for a hang that printed a path that is not on disk', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const interpreter = writeInterpreter('python');
-        pythonStub.binaries[interpreter] = `hung:${path.join(scratchDir, 'gone', 'hydrust')}`;
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        await start(settings);
-
-        expect(interpreterCache()).toEqual({});
-        expect(pythonStub.lookups).toEqual([interpreter]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(onPath);
-    });
-
-    it('uses a hang\'s path when it is on disk but does not remember it across windows', async () => {
-        // The handshake records the version it reports, so it must match.
-        clientStub.initializeResult = initializeResult('0.5.0');
-        const interpreter = writeInterpreter('python');
-        const fromEnv = environmentHydrust();
-        pythonStub.binaries[interpreter] = `hung:${fromEnv}`;
-        rememberVersion(fromEnv, 'v0.5.0');
-        const settings = settingsFor('', { interpreter, serverVersion: '0.4.0' });
-
-        await start(settings);
-        // A reload drops the session cache but keeps globalState.
-        await forgetServerLookups();
-        await start(settings);
-
-        // A hang says nothing about the environment, so it is never persisted.
-        expect(interpreterCache()).toEqual({});
-        expect(pythonStub.lookups).toEqual([interpreter, interpreter]);
-        expect(clientStub.clients[0].serverOptions.run.command).toBe(fromEnv);
-    });
-
     it('falls back to PATH when the environment has no hydrust', async () => {
         const onPath = writeBinary('hydrust');
         rememberVersion(onPath, 'v0.5.0');
@@ -975,27 +596,33 @@ describe('looking for a server in the selected Python environment', () => {
         expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
     });
 
-    it('skips a reported binary that is not on disk, and asks again next time', async () => {
+    it('skips a reported binary that is not on disk', async () => {
+        pythonStub.binaries[INTERPRETER] = path.join(scratchDir, 'gone', 'hydrust');
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+
+        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('asks the interpreter again on every start, so a newly installed hydrust is found', async () => {
         // The handshake records the version it reports, so it must match.
         clientStub.initializeResult = initializeResult('0.5.0');
-        const reported = path.join(scratchDir, 'gone', 'hydrust');
-        pythonStub.binaries[INTERPRETER] = reported;
         const onPath = writeBinary('hydrust');
         rememberVersion(onPath, 'v0.5.0');
         whichStub.paths = { hydrust: onPath };
         const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
 
         await start(settings);
-        // An answer that pointed at nothing is not remembered, so an install
-        // that lands afterwards is picked up rather than missed all session.
-        fs.mkdirSync(path.dirname(reported), { recursive: true });
-        fs.writeFileSync(reported, 'not a program', { mode: 0o644 });
-        rememberVersion(reported, 'v0.5.0');
+        const fromEnv = environmentHydrust();
+        rememberVersion(fromEnv, 'v0.5.0');
         await start(settings);
 
-        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
         expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
-        expect(clientStub.clients[1].serverOptions.run.command).toBe(reported);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
     });
 
     it('skips an environment hydrust that is the pre-merge CLI', async () => {
@@ -1016,17 +643,6 @@ describe('looking for a server in the selected Python environment', () => {
         await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
 
         expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
-    });
-
-    it('carries on to PATH when the lookup itself throws', async () => {
-        pythonStub.binaries[INTERPRETER] = new Error('boom');
-        const onPath = writeBinary('hydrust');
-        rememberVersion(onPath, 'v0.5.0');
-        whichStub.paths = { hydrust: onPath };
-
-        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
-
-        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
     });
 
     it('is not consulted when no interpreter is known', async () => {

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { LanguageClient } from 'vscode-languageclient/node';
 import { LazyOutputChannel, logger } from "./common/logger";
-import { forgetServerLookups, startServer, stopServer } from './common/server';
+import { startServer, stopServer } from './common/server';
 import { getExtensionSettings, checkIfConfigurationChanged } from './common/settings';
 import { getProjectRoot, registerCommand, onDidChangeConfiguration } from './common/vscodeapi';
 import { CompatReporter } from './common/compat';
@@ -44,11 +44,10 @@ function loadServerDefaults(): ServerInfo {
  * Extension activation
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-    // These outlive a single activation, so start from a clean slate in case the
+    // Both outlive a single activation, so start from a clean slate in case the
     // extension is activated again without the module being reloaded.
     deactivating = false;
     pendingRun = undefined;
-    void forgetServerLookups();
 
     const serverInfo = loadServerDefaults();
     const serverName = serverInfo.name;
@@ -81,10 +80,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return pendingRun;
     };
 
-    // Set by the restart command and acted on inside the queued run, so a
-    // start still in flight cannot re-seed the caches after they are cleared.
-    let forgetLookupsNext = false;
-
     const doRunServer = async () => {
         if (deactivating) {
             return;
@@ -110,11 +105,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 } else {
                     logger.info('No Python interpreter found, Hydrust will attempt to auto-detect one.');
                 }
-            }
-
-            if (forgetLookupsNext) {
-                forgetLookupsNext = false;
-                await forgetServerLookups(context, settings.interpreter);
             }
 
             const started = await startServer(
@@ -183,7 +173,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }),
         registerCommand(`${serverId}.restart`, async () => {
             logger.info('Restart command triggered');
-            forgetLookupsNext = true;
             await runServer();
         }),
         registerCommand(`${serverId}.showLogs`, () => {

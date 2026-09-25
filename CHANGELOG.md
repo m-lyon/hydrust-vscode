@@ -2,7 +2,7 @@
 
 ## [0.1.8]
 
-- With `importStrategy: fromEnvironment`, a `hydrust` installed in the selected Python environment (for example by `uv add --dev hydrust`) is now found and used ahead of one on `PATH`, even when VS Code was not started from an activated shell. The extension asks the interpreter through the package's `find_hydrust_bin()`, which ships with server v0.5.0 on PyPI; for any environment without the package, including every older server, resolution falls through to `PATH` and the bundled server exactly as before. Each interpreter is asked once per session; run **Hydrust: Restart Server** after installing `hydrust` into an environment already in use
+- With `importStrategy: fromEnvironment`, a `hydrust` installed in the selected Python environment (for example by `uv add --dev hydrust`) is now found and used ahead of one on `PATH`, even when VS Code was not started from an activated shell. The extension asks the interpreter through the package's `find_hydrust_bin()`, which ships with server v0.5.0 on PyPI. For any environment without the package, including every older server, resolution falls through to `PATH` and the bundled server exactly as before.
 
 ## [0.1.7]
 

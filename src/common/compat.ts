@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs-extra';
-import * as path from 'path';
 import { spawn } from 'child_process';
 import { logger } from './logger';
 import {
@@ -36,9 +35,6 @@ export const PROBE_CACHE_KEY = 'hydrust.serverVersionProbe.v1';
 /** How many probe results to keep. The oldest are dropped past this. */
 export const PROBE_CACHE_LIMIT = 32;
 
-/** Cap on how much `--version` output is kept: a version line is short. */
-const PROBE_OUTPUT_LIMIT = 4096;
-
 /** A server binary the extension has picked out, before it has been started. */
 export interface ResolvedBinary {
     /** Absolute path to the executable. */
@@ -67,64 +63,6 @@ async function binaryFingerprint(binaryPath: string): Promise<string | undefined
         return `${binaryPath}|${Math.round(stats.mtimeMs)}|${stats.size}`;
     } catch (err) {
         logger.debug(`Could not stat ${binaryPath} for the version cache: ${err}`);
-        return undefined;
-    }
-}
-
-/**
- * Stats of the directory hydrust's script would land in for an interpreter:
- * the `Scripts` beside it on Windows when there is one, otherwise the
- * interpreter's own directory.
- */
-async function scriptsDirectory(
-    interpreterPath: string,
-    platform: NodeJS.Platform = process.platform
-): Promise<{ mtimeMs: number }> {
-    const own = path.dirname(interpreterPath);
-    if (platform === 'win32') {
-        try {
-            const beside = await fs.stat(path.join(own, 'Scripts'));
-            if (beside.isDirectory()) {
-                return beside;
-            }
-        } catch {
-            // No such directory: a venv, where the interpreter is already in `Scripts`.
-        }
-    }
-    return fs.stat(own);
-}
-
-/**
- * Build the cache key for an interpreter. Unlike `binaryFingerprint` this
- * does not follow symlinks: a venv's `bin/python` is normally a symlink to
- * the base interpreter, and stats taken through it would not change when the
- * venv is deleted and rebuilt at the same path.
- *
- * The environment's scripts directory goes in too: installing hydrust drops a
- * script in there, so a remembered "not installed" for that environment stops
- * being used as soon as it is installed. That is the directory holding the
- * interpreter (`bin`, or `Scripts` in a Windows venv), or the `Scripts` beside
- * it in a Windows conda-style layout where the interpreter sits at the root of
- * the environment. A layout that installs scripts somewhere else again (a
- * system interpreter with a `pip install --user`) is not noticed; **Hydrust:
- * Restart Server** is the answer there.
- */
-export async function interpreterFingerprint(
-    interpreterPath: string,
-    platform: NodeJS.Platform = process.platform
-): Promise<string | undefined> {
-    try {
-        const stats = await fs.lstat(interpreterPath);
-        let scripts = '';
-        try {
-            const dir = await scriptsDirectory(interpreterPath, platform);
-            scripts = `|${Math.round(dir.mtimeMs)}`;
-        } catch (err) {
-            logger.debug(`Could not stat the scripts directory of ${interpreterPath} for the interpreter cache: ${err}`);
-        }
-        return `${interpreterPath}|${Math.round(stats.mtimeMs)}|${stats.size}${scripts}`;
-    } catch (err) {
-        logger.debug(`Could not stat ${interpreterPath} for the interpreter cache: ${err}`);
         return undefined;
     }
 }
@@ -172,25 +110,11 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
                 'and the version treated as unknown.'
             );
             child.kill('SIGKILL');
-            child.stdout?.destroy();
-            child.stderr?.destroy();
             finish(undefined);
         }, timeoutMs);
 
-        // setEncoding, not per-chunk toString: a multi-byte character split
-        // across a chunk boundary must not decode to replacement characters.
-        child.stdout?.setEncoding('utf8');
-        // A pipe whose peer was just killed can fail on the read side; that
-        // carries nothing the probe needs, so swallow it rather than let it
-        // surface as an uncaught exception.
-        child.stdout?.on('error', () => undefined);
-        child.stderr?.on('error', () => undefined);
-        child.stdout?.on('data', (chunk: string) => {
-            // Keep the head: the version is parsed from the first match, so a
-            // binary that follows its version line with noise must not lose it.
-            if (stdout.length < PROBE_OUTPUT_LIMIT) {
-                stdout = (stdout + chunk).slice(0, PROBE_OUTPUT_LIMIT);
-            }
+        child.stdout?.on('data', (chunk: Buffer) => {
+            stdout += chunk.toString();
         });
         // Drain stderr as well. Old servers log there on startup and a full pipe
         // would stall the child before the timeout can fire.
@@ -253,58 +177,31 @@ export async function probeBinaryVersion(
  *
  * The fingerprint changes every time the binary is replaced, so without a cap
  * the cache would collect one dead entry per upgrade and keep it for the life
- * of the install.
+ * of the install. Entries are rewritten in order with the one just used last,
+ * and anything past the cap falls off the front. Reads call this too, so the
+ * binary that falls off is the one left untouched the longest rather than the
+ * one written the longest ago.
  */
 async function rememberVersion(
     context: vscode.ExtensionContext,
     fingerprint: string,
     version: ServerVersion | undefined
 ): Promise<void> {
-    await rememberInLruCache(
-        context,
-        PROBE_CACHE_KEY,
-        fingerprint,
-        version ? formatServerVersion(version) : null,
-        PROBE_CACHE_LIMIT
-    );
-}
-
-/**
- * Store `value` against `key` in a capped globalState cache.
- *
- * Entries are rewritten in order with the one just used last, and anything
- * past the cap falls off the front; this relies on a JSON object keeping its
- * keys in insertion order. Reads call this too, so the entry that falls off is
- * the one left untouched the longest rather than the one written the longest
- * ago.
- *
- * `dropPrefix` drops any other entry whose key starts with it, so a key that
- * carries a changing fingerprint leaves no dead entries behind to crowd out
- * live ones.
- */
-export async function rememberInLruCache(
-    context: vscode.ExtensionContext,
-    cacheKey: string,
-    key: string,
-    value: string | null,
-    limit: number,
-    dropPrefix?: string
-): Promise<void> {
-    const existing = context.globalState.get<Record<string, string | null>>(cacheKey, {});
+    const existing = context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {});
     const cache: Record<string, string | null> = {};
-    for (const [existingKey, existingValue] of Object.entries(existing)) {
-        if (existingKey !== key && !(dropPrefix && existingKey.startsWith(dropPrefix))) {
-            cache[existingKey] = existingValue;
+    for (const [key, value] of Object.entries(existing)) {
+        if (key !== fingerprint) {
+            cache[key] = value;
         }
     }
-    cache[key] = value;
+    cache[fingerprint] = version ? formatServerVersion(version) : null;
 
     const keys = Object.keys(cache);
-    for (const stale of keys.slice(0, Math.max(0, keys.length - limit))) {
+    for (const stale of keys.slice(0, Math.max(0, keys.length - PROBE_CACHE_LIMIT))) {
         delete cache[stale];
     }
 
-    await context.globalState.update(cacheKey, cache);
+    await context.globalState.update(PROBE_CACHE_KEY, cache);
 }
 
 /** True when the two configuration values should be treated as the same. */

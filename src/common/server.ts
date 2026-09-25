@@ -15,7 +15,7 @@ import {
 } from './compatTable';
 import { ExtensionSettings } from './settings';
 import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
-import { ResolvedBinary, ServerCompat, interpreterFingerprint, probeBinaryVersion, rememberInLruCache } from './compat';
+import { ResolvedBinary, ServerCompat, probeBinaryVersion } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
 import { findHydrustInInterpreter } from './pythonEnvironment';
@@ -35,98 +35,6 @@ const recheckedUnknown = new Set<string>();
 
 /** `serverPath` settings already warned about this session, so restarts do not repeat the toast. */
 const warnedServerPaths = new Set<string>();
-
-/**
- * What each Python interpreter last reported as its hydrust, including the
- * common answer of nothing at all. Starting an interpreter is slow, and a
- * restart happens for every settings change and every interpreter change, so
- * the answer is remembered for the session; `forgetServerLookups` drops it
- * when the user asks for a restart, which is what they do after installing
- * hydrust into the environment.
- */
-const interpreterBinaries = new Map<string, string | undefined>();
-
-/** globalState key holding what each interpreter last reported. */
-export const INTERPRETER_CACHE_KEY = 'hydrust.interpreterLookup.v1';
-
-/** How many interpreter answers to keep. The oldest are dropped past this. */
-export const INTERPRETER_CACHE_LIMIT = 16;
-
-/**
- * Forget what the interpreters reported, so the next start asks them again,
- * along with the once-per-session `--version` recheck of binaries whose
- * version is remembered as unknown, so a restart re-probes those too. The
- * stored answers go too when a context is given, since a window reload is not
- * what the user runs after installing hydrust into the environment. Only the
- * given interpreter's stored answers are dropped, though: globalState is
- * shared, so clearing it all would make every other open window pay the
- * interpreter startup cost again for an environment the user did not touch.
- */
-export async function forgetServerLookups(
-    context?: vscode.ExtensionContext,
-    interpreter?: string
-): Promise<void> {
-    interpreterBinaries.clear();
-    recheckedUnknown.clear();
-    if (context && interpreter) {
-        try {
-            const existing = context.globalState.get<Record<string, string | null>>(INTERPRETER_CACHE_KEY, {});
-            // Matched on the path, not the whole fingerprint: installing
-            // hydrust changes the mtimes the fingerprint carries, so the entry
-            // to drop no longer has the key the interpreter would hash to now.
-            const prefix = `${interpreter}|`;
-            const cache: Record<string, string | null> = {};
-            for (const [key, value] of Object.entries(existing)) {
-                if (!key.startsWith(prefix)) {
-                    cache[key] = value;
-                }
-            }
-            await context.globalState.update(INTERPRETER_CACHE_KEY, cache);
-        } catch (err) {
-            logger.warn(`Could not forget what ${interpreter} reported: ${err}`);
-        }
-    }
-}
-
-/** Store what an interpreter answered, letting a storage failure pass: it must
- * not change which server is chosen. */
-async function tryRememberInterpreterLookup(
-    context: vscode.ExtensionContext,
-    interpreter: string,
-    fingerprint: string,
-    found: string | undefined
-): Promise<void> {
-    try {
-        await rememberInterpreterLookup(context, interpreter, fingerprint, found);
-    } catch (err) {
-        logger.warn(`Could not remember what an interpreter reported: ${err}`);
-    }
-}
-
-/**
- * Store what an interpreter answered, dropping the oldest entries past the cap
- * along with the interpreter's own earlier fingerprints, which every install
- * into the environment mints anew.
- */
-async function rememberInterpreterLookup(
-    context: vscode.ExtensionContext,
-    interpreter: string,
-    fingerprint: string,
-    found: string | undefined
-): Promise<void> {
-    // Built from the known path rather than recovered from the fingerprint: a
-    // path may itself contain the `|` the fields are joined with, so scanning
-    // for the first one can end the prefix mid-path and drop the answers of
-    // unrelated interpreters that share it.
-    await rememberInLruCache(
-        context,
-        INTERPRETER_CACHE_KEY,
-        fingerprint,
-        found ?? null,
-        INTERPRETER_CACHE_LIMIT,
-        `${interpreter}|`
-    );
-}
 
 /**
  * A running server, together with what the extension knows about what it
@@ -178,103 +86,26 @@ function recheckUnknownOnce(binaryPath: string): boolean {
 }
 
 /**
- * Ask an interpreter where its hydrust is, or hand back what it said earlier.
- * A remembered path that has since gone (a reinstall, a deleted environment)
- * is worth asking about again; anything else it answered stands for the
- * session, apart from a path that is not on disk at all. An interpreter that
- * could not be asked at all is not remembered, so a later start asks it again,
- * except one that hung: every start would otherwise stall for the whole lookup
- * timeout before falling back to PATH.
- *
- * A definitive answer is also stored in globalState against the interpreter's
- * path, its own file stats (not the symlink target's) and the state of the
- * directory it lives in, so a new window does not pay the interpreter startup
- * again, while installing hydrust into the environment drops the entry. A hang
- * is only remembered for the session, since it says nothing about the
- * environment, and an installed hydrust that could not say where its binary is
- * is not remembered at all, since fixing that does not change the interpreter
- * the entry is keyed on.
- * **Hydrust: Restart Server** clears both.
- */
-async function lookUpInterpreter(
-    interpreter: string,
-    context: vscode.ExtensionContext,
-    probeTimeoutMs?: number
-): Promise<string | undefined> {
-    if (interpreterBinaries.has(interpreter)) {
-        const remembered = interpreterBinaries.get(interpreter);
-        if (!remembered || await fsapi.pathExists(remembered)) {
-            return remembered;
-        }
-    }
-
-    const fingerprint = await interpreterFingerprint(interpreter);
-    const stored = context.globalState.get<Record<string, string | null>>(INTERPRETER_CACHE_KEY, {});
-    if (fingerprint && Object.prototype.hasOwnProperty.call(stored, fingerprint)) {
-        const remembered = stored[fingerprint] ?? undefined;
-        if (!remembered || await fsapi.pathExists(remembered)) {
-            interpreterBinaries.set(interpreter, remembered);
-            const keys = Object.keys(stored);
-            if (keys[keys.length - 1] !== fingerprint) {
-                // Rewrite it so an interpreter still in use keeps its place.
-                // Skipped when it is already the newest entry, so the common
-                // case does not write to persisted storage on every start.
-                await tryRememberInterpreterLookup(context, interpreter, fingerprint, remembered);
-            }
-            return remembered;
-        }
-    }
-
-    const lookup = await findHydrustInInterpreter(interpreter, probeTimeoutMs);
-    if (lookup.kind === 'couldNotAsk') {
-        if (lookup.timedOut) {
-            interpreterBinaries.set(interpreter, undefined);
-        }
-        return undefined;
-    }
-    const found = lookup.kind === 'found' ? lookup.path : undefined;
-    if (found && !(await fsapi.pathExists(found))) {
-        if (lookup.kind === 'found' && lookup.timedOut) {
-            // A hang that printed a half-written path: remember the hang, so a
-            // later start does not stall for the whole lookup timeout again.
-            interpreterBinaries.set(interpreter, undefined);
-        }
-        // Otherwise not remembered: the interpreter did answer, so the
-        // environment has hydrust and a later start should ask again rather
-        // than be stuck on PATH for the session (a half-finished install, or
-        // output that ran into the answer).
-        logger.warn(`Ignoring ${found}: reported by ${interpreter} but not found on disk.`);
-        return undefined;
-    }
-    if (lookup.kind === 'notInstalled' && lookup.broken) {
-        // Not remembered at all: fixing a half-finished install does not
-        // change the interpreter, so every later start should ask again.
-        return undefined;
-    }
-    interpreterBinaries.set(interpreter, found);
-    if (fingerprint && !(lookup.kind === 'found' && lookup.timedOut)) {
-        await tryRememberInterpreterLookup(context, interpreter, fingerprint, found);
-    }
-    return found;
-}
-
-/**
  * Look for a hydrust installed in the selected Python environment, for example
  * by `uv add --dev hydrust`. Resolves to undefined whenever that does not give a
  * usable server, so the caller can carry on to PATH: in particular for every
  * environment without the `hydrust` package, which includes every server before
  * v0.5.0, since none was published to PyPI.
  *
- * `probeTimeoutMs` covers both the interpreter lookup and the `--version`
- * probe, and only exists so the tests can make a hang happen quickly.
+ * The binary it reports is checked the same way as one on PATH: it has to
+ * exist and report v0.5.0 or later.
  */
 async function findInPythonEnvironment(
     interpreter: string,
     context: vscode.ExtensionContext,
     probeTimeoutMs?: number
 ): Promise<ResolvedBinary | undefined> {
-    const binaryPath = await lookUpInterpreter(interpreter, context, probeTimeoutMs);
+    const binaryPath = await findHydrustInInterpreter(interpreter, context.extensionPath);
     if (!binaryPath) {
+        return undefined;
+    }
+    if (!(await fsapi.pathExists(binaryPath))) {
+        logger.warn(`Ignoring ${binaryPath}: reported by ${interpreter} but not found on disk.`);
         return undefined;
     }
     const version = await probeBinaryVersion(binaryPath, context, probeTimeoutMs, recheckUnknownOnce(binaryPath));
