@@ -10,7 +10,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import * as zlib from 'zlib';
+import { execFileSync, spawnSync } from 'child_process';
 import type * as vscode from 'vscode';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -96,6 +97,7 @@ import {
     TAG_PATTERN,
     compareVersionsDesc,
     ensureServer,
+    extractServerArchive,
     findExistingExecutable,
     markVersionUsed,
     rateLimitRetryTime,
@@ -103,6 +105,7 @@ import {
 } from '../../src/common/download';
 import {
     FALLBACK_SERVER_VERSION,
+    getArchiveDirectoryName,
     getArchiveFileName,
     getArchiveFileNameCandidates,
     getDownloadUrl,
@@ -622,6 +625,98 @@ describe.skipIf(process.platform === 'win32')('ensureServer', () => {
 
         expect(first).toEqual(second);
         expect(requested(RELEASES_PAGE)).toBe(1);
+    });
+
+    it('installs an archive without a top-level directory, as the Windows zip is', async () => {
+        const info = getPlatformInfo();
+        const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-archive-'));
+        fs.writeFileSync(path.join(buildDir, `${LEGACY_BINARY_NAME}${info.executableSuffix}`), '#!/bin/sh\n');
+        fs.writeFileSync(path.join(buildDir, 'README.md'), 'readme');
+        const archivePath = path.join(os.tmpdir(), `hydrust-flat-${process.pid}.tar.xz`);
+        execFileSync('tar', ['-cJf', archivePath, '-C', buildDir, '.']);
+        const flat = fs.readFileSync(archivePath);
+        fs.rmSync(buildDir, { recursive: true, force: true });
+        fs.rmSync(archivePath, { force: true });
+        net.routes.set(RELEASES_PAGE, redirectTo('v0.4.2'));
+        net.routes.set(assetUrl('v0.4.2'), { status: 200, body: flat });
+        net.routes.set(`${assetUrl('v0.4.2')}.sha256`, {
+            status: 200,
+            body: `${crypto.createHash('sha256').update(flat).digest('hex')}  ${assetName()}\n`,
+        });
+
+        const installed = await ensure();
+
+        expect(installed).toEqual({ path: getExecutablePath(context, 'v0.4.2'), version: 'v0.4.2' });
+        expect(fs.existsSync(installed.path)).toBe(true);
+    });
+});
+
+/** Build a zip whose entries are stored uncompressed, so no zip tool is needed to make one. */
+function storedZip(files: Record<string, string>): Buffer {
+    const locals: Buffer[] = [];
+    const centrals: Buffer[] = [];
+    let offset = 0;
+    for (const [name, content] of Object.entries(files)) {
+        const nameBytes = Buffer.from(name);
+        const data = Buffer.from(content);
+        const crc = zlib.crc32(data);
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(0x04034b50, 0);
+        local.writeUInt16LE(20, 4);
+        local.writeUInt16LE(0x21, 12); // 1980-01-01
+        local.writeUInt32LE(crc, 14);
+        local.writeUInt32LE(data.length, 18);
+        local.writeUInt32LE(data.length, 22);
+        local.writeUInt16LE(nameBytes.length, 26);
+        const central = Buffer.alloc(46);
+        central.writeUInt32LE(0x02014b50, 0);
+        central.writeUInt16LE(20, 4);
+        central.writeUInt16LE(20, 6);
+        central.writeUInt16LE(0x21, 14);
+        central.writeUInt32LE(crc, 16);
+        central.writeUInt32LE(data.length, 20);
+        central.writeUInt32LE(data.length, 24);
+        central.writeUInt16LE(nameBytes.length, 28);
+        central.writeUInt32LE(offset, 42);
+        locals.push(local, nameBytes, data);
+        centrals.push(central, nameBytes);
+        offset += local.length + nameBytes.length + data.length;
+    }
+    const directory = Buffer.concat(centrals);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(Object.keys(files).length, 8);
+    end.writeUInt16LE(Object.keys(files).length, 10);
+    end.writeUInt32LE(directory.length, 12);
+    end.writeUInt32LE(offset, 16);
+    return Buffer.concat([...locals, directory, end]);
+}
+
+// Zips are expanded with PowerShell on Windows and `unzip` everywhere else.
+const canUnzip = process.platform === 'win32' || spawnSync('unzip', ['-v']).error === undefined;
+
+describe.skipIf(!canUnzip)('extractServerArchive with a zip', () => {
+    const dirName = getArchiveDirectoryName({ platform: 'x86_64-pc-windows-msvc', archiveExt: 'zip', executableSuffix: '.exe' }, 'v0.5.0');
+
+    async function extract(files: Record<string, string>): Promise<string> {
+        const archivePath = path.join(scratchDir, `${dirName}.zip`);
+        fs.writeFileSync(archivePath, storedZip(files));
+        await extractServerArchive(archivePath, scratchDir, dirName);
+        return path.join(scratchDir, dirName);
+    }
+
+    it('puts the files of a flat zip, as every release so far ships, in the archive directory', async () => {
+        const installDir = await extract({ 'hydrust.exe': 'binary', 'README.md': 'readme' });
+
+        expect(fs.readdirSync(installDir).sort()).toEqual(['README.md', 'hydrust.exe']);
+        expect(fs.readdirSync(scratchDir).sort()).toEqual([dirName, `${dirName}.zip`].sort());
+    });
+
+    it('does not nest a zip that already has the archive directory at the top', async () => {
+        const installDir = await extract({ [`${dirName}/hydrust.exe`]: 'binary', [`${dirName}/README.md`]: 'readme' });
+
+        expect(fs.readdirSync(installDir).sort()).toEqual(['README.md', 'hydrust.exe']);
+        expect(fs.readdirSync(scratchDir).sort()).toEqual([dirName, `${dirName}.zip`].sort());
     });
 });
 
