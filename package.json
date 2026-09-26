@@ -2,7 +2,7 @@
   "name": "hydrust",
   "displayName": "Hydrust",
   "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "m-lyon",
   "license": "MIT",
   "repository": {
@@ -33,7 +33,7 @@
       "properties": {
         "hydrust.serverPath": {
           "default": "",
-          "description": "Path to the hydrust executable. Takes priority over environment PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
+          "description": "Path to the hydrust executable. Takes priority over the Python environment, PATH and bundled versions. If empty or invalid, falls back to importStrategy setting.",
           "scope": "resource",
           "type": "string"
         },
@@ -50,8 +50,8 @@
             "fromEnvironment",
             "useBundled"
           ],
-          "enumDescriptions": [
-            "Use the hydrust server from the environment (available on PATH, under either 'hydrust' or the older 'hydra-lsp' name), whilst falling back to bundled executable if not found.",
+          "markdownEnumDescriptions": [
+            "Uses the hydrust server from the environment in this order: 1) `hydrust` from the Python environment (requires `hydrust` v0.5.0 or greater), 2) `hydrust` (or `hydra-lsp` alias) on PATH, 3) bundled executable if neither is found.",
             "Always use the bundled hydrust executable."
           ],
           "scope": "window",

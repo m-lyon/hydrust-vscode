@@ -365,3 +365,48 @@ describe('FEATURE_COMPAT', () => {
         expectNoProblems(problems);
     });
 });
+
+/**
+ * The interpreter lookup imports `find_hydrust_bin` from the `hydrust`
+ * package, a contract that lives in the server repository. A rename there
+ * would make every lookup report `notInstalled` and silently degrade the
+ * extension to a PATH lookup, so check it the same way the tables above are
+ * checked: from the tagged sources themselves.
+ */
+describe('the find_hydrust_bin contract', () => {
+    /** The first server release the extension claims ships it (pythonEnvironment.ts). */
+    const CLAIMED_SINCE = 'v0.5.0';
+
+    function expectExports(source: string | undefined, where: string): void {
+        expect(source, `${where} has no python/hydrust/__init__.py, so nothing exports find_hydrust_bin`)
+            .toBeDefined();
+        // Defined there, or imported into it from a submodule: either way
+        // `from hydrust import find_hydrust_bin` resolves, which is the whole
+        // contract the extension depends on. The name is looked for anywhere
+        // outside a comment, so a parenthesised multi-line import — what a
+        // formatter usually leaves in an `__init__.py` — counts too.
+        const code = source!.replace(/#.*$/gm, '');
+        expect(
+            /\bfind_hydrust_bin\b/.test(code),
+            `${where} neither defines nor imports find_hydrust_bin in the hydrust package`
+        ).toBe(true);
+    }
+
+    it(`exports it from the hydrust package at ${CLAIMED_SINCE}`, () => {
+        if (!tags.includes(CLAIMED_SINCE)) {
+            // Not released yet, so the contract only exists in the working tree.
+            expectExports(fileInWorkingTree('python/hydrust/__init__.py'), 'the server working tree');
+            return;
+        }
+        expectExports(fileAtTag(CLAIMED_SINCE, 'python/hydrust/__init__.py'), CLAIMED_SINCE);
+    });
+
+    it('still exports it at the newest released tag', () => {
+        const newest = tags[tags.length - 1];
+        if (!tagAtLeast(newest, CLAIMED_SINCE)) {
+            // Every release so far predates the contract; nothing to check.
+            return;
+        }
+        expectExports(fileAtTag(newest, 'python/hydrust/__init__.py'), newest);
+    });
+});

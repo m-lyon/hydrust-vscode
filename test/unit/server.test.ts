@@ -56,6 +56,24 @@ vi.mock('which', () => ({
     default: async (name: string) => whichStub.paths[name] ?? null,
 }));
 
+/**
+ * What each Python interpreter reports as its hydrust binary. An interpreter
+ * that is not listed has no hydrust installed, which is every interpreter the
+ * older tests use, so they resolve exactly as they did before the lookup
+ * existed.
+ */
+const pythonStub = vi.hoisted(() => ({
+    binaries: {} as Record<string, string>,
+    lookups: [] as string[],
+}));
+
+vi.mock('../../src/common/pythonEnvironment', () => ({
+    findHydrustInInterpreter: async (interpreter: string) => {
+        pythonStub.lookups.push(interpreter);
+        return pythonStub.binaries[interpreter];
+    },
+}));
+
 vi.mock('../../src/common/download', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../src/common/download')>();
     return {
@@ -210,6 +228,8 @@ beforeEach(() => {
     downloadStub.existing = undefined;
     downloadStub.scans = 0;
     whichStub.paths = {};
+    pythonStub.binaries = {};
+    pythonStub.lookups = [];
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
     outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
@@ -510,6 +530,152 @@ describe('looking for a server on PATH', () => {
 
         expect(downloadStub.scans).toBe(1);
         expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+});
+
+describe('looking for a server in the selected Python environment', () => {
+    const INTERPRETER = '/project/.venv/bin/python';
+
+    /** Leave bundled resolution nowhere to go but an installed binary, so it never downloads. */
+    function bundledFallback(): string {
+        const bundled = writeBinary('bundled-hydra-lsp');
+        rememberVersion(bundled, 'v0.4.0');
+        downloadStub.ensureError = new Error('offline');
+        downloadStub.existing = { path: bundled, version: 'v0.4.0' };
+        return bundled;
+    }
+
+    /** A hydrust the interpreter reports. Its version is seeded separately, or left unknown. */
+    function environmentHydrust(): string {
+        fs.mkdirSync(path.join(scratchDir, 'venv-bin'), { recursive: true });
+        const hydrust = path.join(scratchDir, 'venv-bin', 'hydrust');
+        fs.writeFileSync(hydrust, 'not a program', { mode: 0o644 });
+        pythonStub.binaries[INTERPRETER] = hydrust;
+        return hydrust;
+    }
+
+    it('uses the environment\'s hydrust ahead of a newer one on PATH', async () => {
+        const fromEnv = environmentHydrust();
+        const onPath = writeBinary('hydrust');
+        whichStub.paths = { hydrust: onPath };
+        rememberVersions({ [fromEnv]: 'v0.5.0', [onPath]: 'v0.6.0' });
+
+        const started = await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER]);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(fromEnv);
+        expect(started.compat).toBeDefined();
+    });
+
+    it('falls back to PATH when the environment has no hydrust', async () => {
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+
+        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER]);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('falls back to an older hydra-lsp on PATH when the environment has no hydrust', async () => {
+        const hydraLsp = writeBinary('hydra-lsp');
+        rememberVersion(hydraLsp, 'v0.4.2');
+        whichStub.paths = { 'hydra-lsp': hydraLsp };
+
+        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(hydraLsp);
+    });
+
+    it('falls back to bundled when neither the environment nor PATH has a server', async () => {
+        const bundled = bundledFallback();
+
+        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+
+    it('skips a reported binary that is not on disk', async () => {
+        pythonStub.binaries[INTERPRETER] = path.join(scratchDir, 'gone', 'hydrust');
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+
+        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('asks the interpreter again on every start, so a newly installed hydrust is found', async () => {
+        // The handshake records the version it reports, so it must match.
+        clientStub.initializeResult = initializeResult('0.5.0');
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+        const settings = settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' });
+
+        await start(settings);
+        const fromEnv = environmentHydrust();
+        rememberVersion(fromEnv, 'v0.5.0');
+        await start(settings);
+
+        expect(pythonStub.lookups).toEqual([INTERPRETER, INTERPRETER]);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
+        expect(clientStub.clients[1].serverOptions.run.command).toBe(fromEnv);
+    });
+
+    it('skips an environment hydrust that is the pre-merge CLI', async () => {
+        const fromEnv = environmentHydrust();
+        const onPath = writeBinary('hydrust');
+        whichStub.paths = { hydrust: onPath };
+        rememberVersions({ [fromEnv]: 'v0.4.2', [onPath]: 'v0.5.0' });
+
+        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('skips an environment hydrust whose version cannot be determined', async () => {
+        const bundled = bundledFallback();
+        environmentHydrust();
+
+        await start(settingsFor('', { interpreter: INTERPRETER, serverVersion: '0.4.0' }));
+
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+
+    it('is not consulted when no interpreter is known', async () => {
+        const onPath = writeBinary('hydrust');
+        rememberVersion(onPath, 'v0.5.0');
+        whichStub.paths = { hydrust: onPath };
+
+        await start(settingsFor('', { interpreter: '', serverVersion: '0.4.0' }));
+
+        expect(pythonStub.lookups).toEqual([]);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(onPath);
+    });
+
+    it('is not consulted with useBundled', async () => {
+        const bundled = bundledFallback();
+        const fromEnv = environmentHydrust();
+        rememberVersions({ [bundled]: 'v0.4.0', [fromEnv]: 'v0.5.0' });
+
+        await start(settingsFor('', { interpreter: INTERPRETER, importStrategy: 'useBundled', serverVersion: '0.4.0' }));
+
+        expect(pythonStub.lookups).toEqual([]);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(bundled);
+    });
+
+    it('is not consulted when serverPath points at a usable server', async () => {
+        const configured = writeBinary('hydrust');
+        const fromEnv = environmentHydrust();
+        rememberVersions({ [configured]: 'v0.5.0', [fromEnv]: 'v0.5.0' });
+
+        await start(settingsFor(configured, { interpreter: INTERPRETER }));
+
+        expect(pythonStub.lookups).toEqual([]);
+        expect(clientStub.clients[0].serverOptions.run.command).toBe(configured);
     });
 });
 

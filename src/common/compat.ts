@@ -39,7 +39,7 @@ export const PROBE_CACHE_LIMIT = 32;
 export interface ResolvedBinary {
     /** Absolute path to the executable. */
     path: string;
-    /** Which of the three resolution paths found it. */
+    /** Which of the resolution paths found it. */
     source: ServerSource;
     /** Release tag, when the resolution path already knows it. */
     version?: string;
@@ -48,6 +48,7 @@ export interface ResolvedBinary {
 /** Human-readable name for each way the binary can be found. */
 const SOURCE_LABELS: Record<ServerSource, string> = {
     serverPath: 'hydrust.serverPath setting',
+    pythonEnvironment: 'installed in the selected Python environment',
     environment: 'found on PATH',
     bundled: 'downloaded by the extension',
 };
