@@ -336,10 +336,8 @@ export async function extractServerArchive(archivePath: string, destDir: string,
     await extractArchive(archivePath, unpackDir);
 
     const entries = await fs.readdir(unpackDir);
-    // NTFS is case-insensitive, so a top-level directory differing only in case is the same one there.
-    const sameName = (entry: string) =>
-        process.platform === 'win32' ? entry.toLowerCase() === archiveDirName.toLowerCase() : entry === archiveDirName;
-    const topDir = entries.find(sameName);
+    // NTFS and APFS are case-insensitive by default, and a case-only difference is never a distinct layout.
+    const topDir = entries.find((entry) => entry.toLowerCase() === archiveDirName.toLowerCase());
     const nestedDir = path.join(unpackDir, topDir ?? archiveDirName);
     const isNested = topDir !== undefined && (await fs.stat(nestedDir)).isDirectory();
     const dropped = isNested ? entries.filter((entry) => entry !== topDir) : [];
