@@ -336,8 +336,9 @@ export async function extractServerArchive(archivePath: string, destDir: string,
     await extractArchive(archivePath, unpackDir);
 
     const entries = await fs.readdir(unpackDir);
-    const isNested = entries.length === 1 && entries[0] === archiveDirName;
-    await fs.move(isNested ? path.join(unpackDir, archiveDirName) : unpackDir, path.join(destDir, archiveDirName));
+    const nestedDir = path.join(unpackDir, archiveDirName);
+    const isNested = entries.includes(archiveDirName) && (await fs.stat(nestedDir)).isDirectory();
+    await renameWithRetry(isNested ? nestedDir : unpackDir, path.join(destDir, archiveDirName));
     await fs.remove(unpackDir);
 }
 
