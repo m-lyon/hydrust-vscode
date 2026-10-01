@@ -718,6 +718,13 @@ describe.skipIf(!canUnzip)('extractServerArchive with a zip', () => {
         expect(fs.readdirSync(installDir).sort()).toEqual(['README.md', 'hydrust.exe']);
         expect(fs.readdirSync(scratchDir).sort()).toEqual([dirName, `${dirName}.zip`].sort());
     });
+
+    it('installs the archive directory and drops other top-level entries beside it', async () => {
+        const installDir = await extract({ [`${dirName}/hydrust.exe`]: 'binary', LICENSE: 'license' });
+
+        expect(fs.readdirSync(installDir)).toEqual(['hydrust.exe']);
+        expect(fs.readdirSync(scratchDir).sort()).toEqual([dirName, `${dirName}.zip`].sort());
+    });
 });
 
 describe.skipIf(process.platform === 'win32')('naming across the server rename', () => {
