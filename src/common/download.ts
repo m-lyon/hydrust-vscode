@@ -338,6 +338,10 @@ export async function extractServerArchive(archivePath: string, destDir: string,
     const entries = await fs.readdir(unpackDir);
     const nestedDir = path.join(unpackDir, archiveDirName);
     const isNested = entries.includes(archiveDirName) && (await fs.stat(nestedDir)).isDirectory();
+    const dropped = isNested ? entries.filter((entry) => entry !== archiveDirName) : [];
+    if (dropped.length > 0) {
+        logger.warn(`Ignoring archive entries outside ${archiveDirName}: ${dropped.join(', ')}`);
+    }
     await renameWithRetry(isNested ? nestedDir : unpackDir, path.join(destDir, archiveDirName));
     await fs.remove(unpackDir);
 }
