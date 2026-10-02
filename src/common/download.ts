@@ -325,10 +325,6 @@ async function extractArchive(archivePath: string, destDir: string): Promise<voi
 
 /**
  * Extract a server archive so its files end up in `destDir/archiveDirName`.
- *
- * The tar.xz archives have that directory at the top, but the Windows zip is
- * flat (every release up to v0.5.0 is). Extract somewhere empty first and
- * move whichever layout it turns out to be into place.
  */
 export async function extractServerArchive(archivePath: string, destDir: string, archiveDirName: string): Promise<void> {
     const unpackDir = path.join(destDir, '.unpack');
