@@ -16,6 +16,7 @@ import {
     getChecksumUrl,
     getArchiveFileName,
     getArchiveFileNameCandidates,
+    getArchiveDirectoryName,
     getVersionedDir,
     getExecutablePath,
     getLibsRoot,
@@ -320,6 +321,27 @@ async function extractArchive(archivePath: string, destDir: string): Promise<voi
     } else {
         throw new Error(`Unsupported archive format: ${archivePath}`);
     }
+}
+
+/**
+ * Extract a server archive so its files end up in `destDir/archiveDirName`.
+ */
+export async function extractServerArchive(archivePath: string, destDir: string, archiveDirName: string): Promise<void> {
+    const unpackDir = path.join(destDir, '.unpack');
+    await fs.remove(unpackDir);
+    await extractArchive(archivePath, unpackDir);
+
+    const entries = await fs.readdir(unpackDir);
+    // NTFS and APFS are case-insensitive by default, and a case-only difference is never a distinct layout.
+    const topDir = entries.find((entry) => entry.toLowerCase() === archiveDirName.toLowerCase());
+    const nestedDir = path.join(unpackDir, topDir ?? archiveDirName);
+    const isNested = topDir !== undefined && (await fs.stat(nestedDir)).isDirectory();
+    const dropped = isNested ? entries.filter((entry) => entry !== topDir) : [];
+    if (dropped.length > 0) {
+        logger.warn(`Ignoring archive entries outside ${archiveDirName}: ${dropped.join(', ')}`);
+    }
+    await renameWithRetry(isNested ? nestedDir : unpackDir, path.join(destDir, archiveDirName));
+    await fs.remove(unpackDir);
 }
 
 /**
@@ -666,7 +688,7 @@ async function downloadServer(
 
         // Extract archive
         progress('Extracting archive...');
-        await extractArchive(archivePath, stagingDir);
+        await extractServerArchive(archivePath, stagingDir, getArchiveDirectoryName(platformInfo, resolvedVersion));
         logger.info('Archive extracted');
 
         // Clean up archive

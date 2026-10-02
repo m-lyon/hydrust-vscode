@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.1.9]
+
+- Fixed Windows server install issue
+
 ## [0.1.8]
 
 - With `importStrategy: fromEnvironment`, a `hydrust` installed in the selected Python environment is now found and used ahead of one on `PATH` for hydrust versions v0.5 or greater.
