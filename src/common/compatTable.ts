@@ -325,6 +325,11 @@ export const RULE_COMPAT: readonly RuleCompat[] = [
         since: ver(0, 3, 0),
         evidence: 'v0.3.0 src/diagnostics.rs:46 — new in v0.3.0, absent from v0.2.0 from_code.',
     },
+    {
+        code: 'positional-only-parameter',
+        since: ver(0, 6, 0),
+        evidence: 'Not accepted by any released tag. Added on the hydra-lsp feature/builtins-support branch (src/diagnostics.rs:61, PositionalOnlyParameter), slated for v0.6.0.',
+    },
 ];
 
 /** Optional server behaviours the extension may want to branch on. */
