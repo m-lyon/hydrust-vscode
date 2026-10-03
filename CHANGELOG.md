@@ -1,5 +1,9 @@
 # Change Log
 
+## [Unreleased]
+
+- Added `positional-only-parameter` to the rules accepted by `hydrust.disabledRules`, for hydrust server `v0.6.0`. It reports a positional-only parameter passed by name instead of through `_args_`
+
 ## [0.1.9]
 
 - Fixed Windows server install issue
