@@ -1,5 +1,9 @@
 # Change Log
 
+## [Unreleased]
+
+- Fixed server install failing when the extension's storage path contains an apostrophe (e.g. a Windows user named `O'Brien`), `$`, a backtick or brackets
+
 ## [0.1.10]
 
 - Added `positional-only-parameter` to the rules accepted by `hydrust.disabledRules`, for hydrust server `v0.6.0`. It reports a positional-only parameter passed by name instead of through `_args_`

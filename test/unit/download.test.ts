@@ -100,6 +100,7 @@ import {
     extractServerArchive,
     findExistingExecutable,
     markVersionUsed,
+    quotePowerShellLiteral,
     rateLimitRetryTime,
     versionLastUsedKey,
 } from '../../src/common/download';
@@ -724,6 +725,51 @@ describe.skipIf(!canUnzip)('extractServerArchive with a zip', () => {
 
         expect(fs.readdirSync(installDir)).toEqual(['hydrust.exe']);
         expect(fs.readdirSync(scratchDir).sort()).toEqual([dirName, `${dirName}.zip`].sort());
+    });
+});
+
+describe('quotePowerShellLiteral', () => {
+    it('wraps the value in single quotes and doubles the quotes inside', () => {
+        expect(quotePowerShellLiteral("C:\\Users\\O'Brien\\a.zip")).toBe("'C:\\Users\\O''Brien\\a.zip'");
+        expect(quotePowerShellLiteral('it\u2019s')).toBe("'it\u2019\u2019s'");
+    });
+
+    it('leaves wildcard and expansion characters alone, as a single-quoted string does not expand them', () => {
+        expect(quotePowerShellLiteral('C:\\a[1]*?\\$env:HOME `n')).toBe("'C:\\a[1]*?\\$env:HOME `n'");
+    });
+});
+
+// The global storage directory sits under the user profile, which can hold any of these.
+const AWKWARD_DIR_NAME = "O'Brien $HOME `id` [1]";
+
+describe('extractServerArchive under a path the shell would mangle', () => {
+    const dirName = getArchiveDirectoryName(getPlatformInfo(), 'v0.5.0');
+    let awkwardDir: string;
+
+    beforeEach(() => {
+        awkwardDir = path.join(scratchDir, AWKWARD_DIR_NAME);
+        fs.mkdirSync(awkwardDir);
+    });
+
+    it.skipIf(process.platform === 'win32')('extracts a tar.xz', async () => {
+        fs.mkdirSync(path.join(awkwardDir, dirName));
+        fs.writeFileSync(path.join(awkwardDir, dirName, 'hydrust'), 'binary');
+        const archivePath = path.join(awkwardDir, `${dirName}.tar.xz`);
+        execFileSync('tar', ['-cJf', archivePath, '-C', awkwardDir, dirName]);
+        fs.rmSync(path.join(awkwardDir, dirName), { recursive: true });
+
+        await extractServerArchive(archivePath, awkwardDir, dirName);
+
+        expect(fs.readdirSync(path.join(awkwardDir, dirName))).toEqual(['hydrust']);
+    });
+
+    it.skipIf(!canUnzip)('extracts a zip', async () => {
+        const archivePath = path.join(awkwardDir, `${dirName}.zip`);
+        fs.writeFileSync(archivePath, storedZip({ 'hydrust.exe': 'binary' }));
+
+        await extractServerArchive(archivePath, awkwardDir, dirName);
+
+        expect(fs.readdirSync(path.join(awkwardDir, dirName))).toEqual(['hydrust.exe']);
     });
 });
 
