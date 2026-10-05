@@ -10,7 +10,6 @@ function settings(overrides: Partial<ExtensionSettings> = {}): ExtensionSettings
         interpreter: '',
         importStrategy: 'fromEnvironment',
         serverVersion: 'latest',
-        traceServer: 'off',
         disabledRules: [],
         enableHover: true,
         enableCompletion: true,
@@ -79,7 +78,7 @@ describe('buildInitializationSettings', () => {
 
     it('sends nothing beyond the keys the server reads', () => {
         // logLevel and the client-only settings (serverPath, importStrategy,
-        // traceServer, developerMode) were removed on purpose.
+        // trace.server, developerMode) were removed on purpose.
         const payload = buildInitializationSettings(settings({ numThreads: 2, interpreter: '/usr/bin/python' }));
 
         expect(Object.keys(payload).sort()).toEqual([

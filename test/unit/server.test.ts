@@ -185,7 +185,6 @@ function settingsFor(binaryPath: string, overrides: Partial<ExtensionSettings> =
         interpreter: '/usr/bin/python3',
         importStrategy: 'fromEnvironment',
         serverVersion: 'latest',
-        traceServer: 'off',
         disabledRules: [],
         enableHover: true,
         enableCompletion: true,
