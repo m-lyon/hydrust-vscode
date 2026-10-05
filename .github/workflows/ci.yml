@@ -47,6 +47,27 @@ jobs:
       - name: Unit tests
         run: npm test
 
+  # The PowerShell archive extraction only runs on Windows. Lint, types and
+  # the bundle don't depend on the OS, so the Linux job covers those.
+  windows:
+    name: Unit tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Check out the extension
+        uses: actions/checkout@v6.1.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v5.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
   integration:
     name: Contract and table audit
     if: >-

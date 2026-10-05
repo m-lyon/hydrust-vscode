@@ -1,6 +1,6 @@
 # Change Log
 
-## [Unreleased]
+## [0.2.0]
 
 - Fixed server install failing when the extension's storage path contains an apostrophe (e.g. a Windows user named `O'Brien`), `$`, a backtick or brackets
 
