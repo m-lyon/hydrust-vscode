@@ -309,10 +309,14 @@ async function extractZip(archivePath: string, destDir: string): Promise<void> {
 
     try {
         if (isWindows()) {
-            // Use PowerShell on Windows. -LiteralPath keeps [ ] * ? in the path from being read as wildcards.
+            // Use .NET's ZipFile through PowerShell on Windows. Expand-Archive tests the
+            // destination with wildcard matching, so a path containing [ ] breaks it.
+            // extractServerArchive empties destDir first, so nothing needs overwriting.
             const command =
-                `Expand-Archive -LiteralPath ${quotePowerShellLiteral(archivePath)} ` +
-                `-DestinationPath ${quotePowerShellLiteral(destDir)} -Force`;
+                `$ErrorActionPreference = 'Stop'; ` +
+                `Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
+                `[System.IO.Compression.ZipFile]::ExtractToDirectory(` +
+                `${quotePowerShellLiteral(archivePath)}, ${quotePowerShellLiteral(destDir)})`;
             await runExtractor('powershell', ['-NoProfile', '-NonInteractive', '-Command', command]);
         } else {
             // Use unzip on Unix systems
