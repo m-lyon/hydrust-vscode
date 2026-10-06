@@ -182,7 +182,7 @@ describe('buildCompatReport in fallback mode', () => {
     it('ignores client-only settings that are never sent to the server', () => {
         const report = buildCompatReport({
             version: v(0, 1, 0),
-            configuredSettings: ['serverPath', 'importStrategy', 'traceServer', 'developerMode'],
+            configuredSettings: ['serverPath', 'importStrategy', 'trace.server', 'developerMode'],
             configuredRules: [],
         });
 

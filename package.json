@@ -2,7 +2,7 @@
   "name": "hydrust",
   "displayName": "Hydrust",
   "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "publisher": "m-lyon",
   "license": "MIT",
   "repository": {
@@ -63,7 +63,7 @@
           "scope": "window",
           "type": "string"
         },
-        "hydrust.traceServer": {
+        "hydrust.trace.server": {
           "default": "off",
           "description": "Traces the communication between VS Code and the language server.",
           "enum": [
