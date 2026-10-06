@@ -260,6 +260,25 @@ describe('the probe cache', () => {
         expect(compat.versionLabel).toBe('v0.2.0');
     });
 
+    it('still trusts a remembered version when told to retry unknowns', async () => {
+        // Only a remembered null is asked again; this file could never answer.
+        const file = writeUnrunnableFile('opaque-server');
+        stub.globalState.set(PROBE_CACHE_KEY, { [fingerprintOf(file)]: 'v0.2.0' });
+
+        const version = await probeBinaryVersion(file, asExtensionContext(context), undefined, true);
+
+        expect(version).toEqual({ major: 0, minor: 2, patch: 0 });
+    });
+
+    it('remembers nothing for a binary it cannot stat', async () => {
+        const missing = path.join(scratchDir, 'missing-server');
+
+        const version = await probeBinaryVersion(missing, asExtensionContext(context));
+
+        expect(version).toBeUndefined();
+        expect(probeCache()).toEqual({});
+    });
+
     it('ignores a remembered value that no longer parses', async () => {
         const file = writeUnrunnableFile('opaque-server');
         stub.globalState.set(PROBE_CACHE_KEY, { [fingerprintOf(file)]: 'corrupted' });
