@@ -18,7 +18,6 @@ function settings(overrides: Partial<ExtensionSettings> = {}): ExtensionSettings
         enableSemanticTokens: true,
         enableDiagnostics: true,
         numThreads: 0,
-        developerMode: false,
         ...overrides,
     };
 }

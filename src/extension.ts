@@ -22,23 +22,11 @@ let pendingRun: Promise<void> | undefined;
 /** Set once `deactivate` starts, so a run in flight does not outlive it. */
 let deactivating = false;
 
-/**
- * Server information
- */
-interface ServerInfo {
-    name: string;
-    module: string;
-}
+/** Display name, used in output channel titles. */
+const SERVER_NAME = 'Hydrust';
 
-/**
- * Load server defaults
- */
-function loadServerDefaults(): ServerInfo {
-    return {
-        name: 'Hydrust',
-        module: 'hydrust',
-    };
-}
+/** Configuration section and command prefix. */
+const SERVER_ID = 'hydrust';
 
 /**
  * Extension activation
@@ -49,14 +37,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     deactivating = false;
     pendingRun = undefined;
 
-    const serverInfo = loadServerDefaults();
-    const serverName = serverInfo.name;
-    const serverId = serverInfo.module;
-
-    // Log Server information
-    logger.info(`Name: ${serverInfo.name}`);
-    logger.info(`Module: ${serverInfo.module}`);
-    logger.debug(`Full Server Info: ${JSON.stringify(serverInfo)}`);
+    const serverName = SERVER_NAME;
+    const serverId = SERVER_ID;
 
     // Create output channels for the server and trace logs
     const outputChannel = vscode.window.createOutputChannel(`${serverName} Server`);
@@ -91,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 await compatReporter.update(undefined);
             }
 
-            const projectRoot = await getProjectRoot();
+            const projectRoot = getProjectRoot();
             const settings = getExtensionSettings(serverId, projectRoot);
 
             if (settings.interpreter) {
