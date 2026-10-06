@@ -23,6 +23,7 @@ import {
     getLibsRoot,
     isWindows,
 } from './constants';
+import type { PlatformInfo } from './constants';
 import { fsapi } from './vscodeapi';
 import { isDeveloperMode } from './settings';
 
@@ -230,30 +231,12 @@ async function calculateChecksum(filePath: string): Promise<string> {
 }
 
 /**
- * Verify file checksum against expected checksum
+ * Verify a file against the checksum published at `checksumUrl`, throwing if they differ.
  */
-async function verifyChecksum(filePath: string, checksumUrl: string): Promise<boolean> {
+async function verifyChecksum(filePath: string, checksumUrl: string): Promise<void> {
+    const checksumPath = `${filePath}.sha256`;
     try {
-        // Download checksum file
-        const checksumPath = `${filePath}.sha256`;
         await downloadFile(checksumUrl, checksumPath);
-
-        // Read expected checksum
-        const checksumContent = await fsapi.readFile(checksumPath);
-        const expectedChecksum = checksumContent.trim().split(/\s+/)[0];
-
-        // Calculate actual checksum
-        const actualChecksum = await calculateChecksum(filePath);
-
-        // Clean up checksum file
-        await fs.unlink(checksumPath);
-
-        const isValid = expectedChecksum.toLowerCase() === actualChecksum.toLowerCase();
-        if (!isValid) {
-            logger.error(`Checksum mismatch! Expected: ${expectedChecksum}, Got: ${actualChecksum}`);
-        }
-
-        return isValid;
     } catch (err) {
         // Only a release that publishes no checksum file is installed unverified.
         // Timeouts, network errors and server errors fail the install.
@@ -266,7 +249,17 @@ async function verifyChecksum(filePath: string, checksumUrl: string): Promise<bo
             'Error:',
             err
         );
-        return true;
+        return;
+    }
+
+    const checksumContent = await fsapi.readFile(checksumPath);
+    const expectedChecksum = checksumContent.trim().split(/\s+/)[0];
+    const actualChecksum = await calculateChecksum(filePath);
+    await fs.unlink(checksumPath);
+
+    if (expectedChecksum.toLowerCase() !== actualChecksum.toLowerCase()) {
+        logger.error(`Checksum mismatch! Expected: ${expectedChecksum}, Got: ${actualChecksum}`);
+        throw new Error('Checksum verification failed');
     }
 }
 
@@ -419,6 +412,66 @@ function uncappedRetryTime(headers: IncomingHttpHeaders, now: number): number {
 }
 
 /**
+ * Whether a GitHub API response is a rate-limit rejection. `body` is undefined
+ * when it could not be read.
+ */
+export function isRateLimited(status: number, headers: IncomingHttpHeaders, body: string | undefined): boolean {
+    // Secondary rate limits can return a 403 with neither header; only the body says so.
+    return (
+        status === 429 ||
+        (status === 403 &&
+            (headerValue(headers, 'x-ratelimit-remaining') === '0' ||
+                headerValue(headers, 'retry-after') !== undefined ||
+                /rate limit/i.test(body ?? '')))
+    );
+}
+
+/** The fields read from an entry in the GitHub releases API response. */
+interface ApiRelease {
+    tag_name?: unknown;
+    draft?: boolean;
+    prerelease?: boolean;
+    assets?: { name: string }[];
+}
+
+/**
+ * The tag of the newest published release, out of a GitHub releases API
+ * listing, that has an archive for this platform under the name this extension
+ * will download.
+ */
+export function pickReleaseForPlatform(releases: readonly ApiRelease[], platformInfo: PlatformInfo): string | undefined {
+    // Either name is accepted, because the scan is what decides the version and
+    // so there is nothing to key the name off yet.
+    const expectedAssetNames = getArchiveFileNameCandidates(platformInfo);
+    const newestFirst = releases
+        .filter((release): release is ApiRelease & { tag_name: string } =>
+            typeof release?.tag_name === 'string' && TAG_PATTERN.test(release.tag_name))
+        .sort((a, b) => compareVersionsDesc(a.tag_name, b.tag_name));
+    for (const release of newestFirst) {
+        if (release.draft || release.prerelease || !Array.isArray(release.assets)) {
+            continue;
+        }
+        const derived = getArchiveFileName(platformInfo, release.tag_name);
+        const names = release.assets.map((asset) => asset.name);
+        const matched = names.find((name) => expectedAssetNames.includes(name));
+        if (matched) {
+            if (!names.includes(derived)) {
+                // The naming table and the release disagree, so downloading it
+                // would 404. Skip it and keep looking for an older release.
+                logger.warn(
+                    `Release ${release.tag_name} has an asset named '${matched}', but this ` +
+                    `extension expects '${derived}' for that version. The naming table is out of ` +
+                    'date; skipping this release.'
+                );
+                continue;
+            }
+            return release.tag_name;
+        }
+    }
+    return undefined;
+}
+
+/**
  * Find the newest release that has an archive for this platform, using the
  * GitHub releases API.
  *
@@ -436,9 +489,6 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
     }
 
     const platformInfo = getPlatformInfo();
-    // Either name is accepted, because the scan is what decides the version and
-    // so there is nothing to key the name off yet.
-    const expectedAssetNames = getArchiveFileNameCandidates(platformInfo);
     const url = `https://api.github.com/repos/${SERVER_REPO}/releases?per_page=100`;
     const cachedEtag = context.globalState.get<CachedReleasesEtag>(API_ETAG_CACHE_KEY);
 
@@ -468,14 +518,7 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         return undefined;
     });
 
-    // Secondary rate limits can return a 403 with neither header; only the body says so.
-    const isRateLimited =
-        status === 429 ||
-        (status === 403 &&
-            (headerValue(response.headers, 'x-ratelimit-remaining') === '0' ||
-                headerValue(response.headers, 'retry-after') !== undefined ||
-                /rate limit/i.test(body ?? '')));
-    if (isRateLimited) {
+    if (isRateLimited(status, response.headers, body)) {
         const retryAt = rateLimitRetryTime(response.headers, Date.now());
         await context.globalState.update(API_BACKOFF_KEY, retryAt);
         logger.warn(
@@ -509,37 +552,17 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
         return undefined;
     }
 
-    const newestFirst = releases
-        .filter((release) => typeof release?.tag_name === 'string' && TAG_PATTERN.test(release.tag_name))
-        .sort((a, b) => compareVersionsDesc(a.tag_name, b.tag_name));
-    for (const release of newestFirst) {
-        if (release.draft || release.prerelease || !Array.isArray(release.assets)) {
-            continue;
+    const tag = pickReleaseForPlatform(releases, platformInfo);
+    if (tag) {
+        const etag = headerValue(response.headers, 'etag');
+        if (etag) {
+            await context.globalState.update(API_ETAG_CACHE_KEY, { etag, tag });
         }
-        const derived = getArchiveFileName(platformInfo, release.tag_name);
-        const names: string[] = release.assets.map((asset: { name: string }) => asset.name);
-        const matched = names.find((name) => expectedAssetNames.includes(name));
-        if (matched) {
-            if (!names.includes(derived)) {
-                // The naming table and the release disagree, so downloading it
-                // would 404. Skip it and keep looking for an older release.
-                logger.warn(
-                    `Release ${release.tag_name} has an asset named '${matched}', but this ` +
-                    `extension expects '${derived}' for that version. The naming table is out of ` +
-                    'date; skipping this release.'
-                );
-                continue;
-            }
-            const etag = headerValue(response.headers, 'etag');
-            if (etag) {
-                await context.globalState.update(API_ETAG_CACHE_KEY, { etag, tag: release.tag_name });
-            }
-            logger.info(`Newest release with a ${platformInfo.platform} archive is ${release.tag_name}.`);
-            return release.tag_name;
-        }
+        logger.info(`Newest release with a ${platformInfo.platform} archive is ${tag}.`);
+        return tag;
     }
 
-    const wanted = expectedAssetNames.map((name) => `'${name}'`).join(' or ');
+    const wanted = getArchiveFileNameCandidates(platformInfo).map((name) => `'${name}'`).join(' or ');
     logger.warn(`No GitHub release has an asset matching ${wanted}.`);
     notifyDeveloper(
         `No GitHub release found with an asset matching ${wanted}.`,
@@ -653,6 +676,34 @@ async function pruneOldVersions(context: vscode.ExtensionContext, keep: string):
 }
 
 /**
+ * Clear a long-abandoned `versionedDir` that has no executable, since it is in
+ * the way: renaming onto it fails with EPERM on Windows. It is moved aside to
+ * `discardDir` rather than deleted in place, so an install another window
+ * finished just now is never removed. A recently changed one may be another
+ * window's install landing, so it is left alone.
+ */
+async function clearAbandonedInstall(versionedDir: string, executablePath: string, discardDir: string): Promise<void> {
+    const isAbandoned =
+        (await fsapi.pathExists(versionedDir)) &&
+        !(await fsapi.pathExists(executablePath)) &&
+        Date.now() - (await newestMtime(versionedDir).catch(() => Date.now())) > STALE_STAGING_MS;
+    if (!isAbandoned) {
+        return;
+    }
+    try {
+        await renameWithRetry(versionedDir, discardDir);
+        if (await fsapi.pathExists(path.join(discardDir, path.relative(versionedDir, executablePath)))) {
+            await renameWithRetry(discardDir, versionedDir);
+        } else {
+            logger.warn(`Replacing incomplete install at ${versionedDir}`);
+            await fs.remove(discardDir);
+        }
+    } catch (err) {
+        logger.warn(`Could not clear incomplete install at ${versionedDir}: ${err}`);
+    }
+}
+
+/**
  * Download and install the Hydrust Server binary.
  * `resolvedVersion` must already be a concrete, v-prefixed tag.
  */
@@ -663,13 +714,14 @@ async function downloadServer(
 ): Promise<string> {
     const progress = progressCallback || ((msg: string) => logger.info(msg));
     const versionedDir = getVersionedDir(context, resolvedVersion);
+    const executablePath = getExecutablePath(context, resolvedVersion);
     // Other VS Code windows share this storage, so build the install somewhere
     // only this attempt uses and move it into place once it is complete.
     const stagingDir = path.join(
         getLibsRoot(context),
         `.staging-${versionDirName(resolvedVersion)}-${crypto.randomBytes(6).toString('hex')}`
     );
-    const stagingExecutablePath = path.join(stagingDir, path.relative(versionedDir, getExecutablePath(context, resolvedVersion)));
+    const stagingExecutablePath = path.join(stagingDir, path.relative(versionedDir, executablePath));
 
     await removeStaleStagingDirs(getLibsRoot(context));
 
@@ -687,7 +739,6 @@ async function downloadServer(
 
         const archiveFilename = path.basename(downloadUrl);
         const archivePath = path.join(stagingDir, archiveFilename);
-        const executablePath = getExecutablePath(context, resolvedVersion);
 
         // Download archive
         await downloadFile(downloadUrl, archivePath, () => progress(`Downloading Hydrust Server ${resolvedVersion}...`));
@@ -695,10 +746,7 @@ async function downloadServer(
 
         // Verify checksum
         progress('Verifying download...');
-        const isValid = await verifyChecksum(archivePath, checksumUrl);
-        if (!isValid) {
-            throw new Error('Checksum verification failed');
-        }
+        await verifyChecksum(archivePath, checksumUrl);
         logger.info('Checksum verified');
 
         // Extract archive
@@ -720,29 +768,7 @@ async function downloadServer(
             logger.info('Made executable');
         }
 
-        if (
-            (await fsapi.pathExists(versionedDir)) &&
-            !(await fsapi.pathExists(executablePath)) &&
-            Date.now() - (await newestMtime(versionedDir).catch(() => Date.now())) > STALE_STAGING_MS
-        ) {
-            // A long-abandoned directory without the executable is in the way. Renaming
-            // onto it fails with EPERM on Windows, so clear it first. Move it aside rather
-            // than deleting in place, so an install another window finished just now
-            // is never removed. A recently changed one may be another window's install
-            // landing, so it is left alone.
-            const discardDir = `${stagingDir}-discard`;
-            try {
-                await renameWithRetry(versionedDir, discardDir);
-                if (await fsapi.pathExists(path.join(discardDir, path.relative(versionedDir, executablePath)))) {
-                    await renameWithRetry(discardDir, versionedDir);
-                } else {
-                    logger.warn(`Replacing incomplete install at ${versionedDir}`);
-                    await fs.remove(discardDir);
-                }
-            } catch (err) {
-                logger.warn(`Could not clear incomplete install at ${versionedDir}: ${err}`);
-            }
-        }
+        await clearAbandonedInstall(versionedDir, executablePath, `${stagingDir}-discard`);
 
         try {
             await renameWithRetry(stagingDir, versionedDir);
@@ -782,6 +808,31 @@ function normaliseTag(version: string): string {
     return version.startsWith('v') ? version : `v${version}`;
 }
 
+/**
+ * A progress notification that is not opened until the first message is
+ * reported, and closes on `finish()`.
+ */
+function createLazyProgress(title: string): { report(message: string): void; finish(): void } {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+        finish = resolve;
+    });
+    let notification: Promise<vscode.Progress<{ message?: string }>> | undefined;
+    const report = (message: string) => {
+        notification ??= new Promise((resolve) => {
+            void vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title, cancellable: false },
+                (progress) => {
+                    resolve(progress);
+                    return finished;
+                }
+            );
+        });
+        void notification.then((progress) => progress.report({ message }));
+    };
+    return { report, finish };
+}
+
 /** Use the installed binary for a tag, downloading it first if needed. */
 async function installVersion(tag: string, context: vscode.ExtensionContext): Promise<InstalledServer> {
     const executablePath = getExecutablePath(context, tag);
@@ -796,27 +847,12 @@ async function installVersion(tag: string, context: vscode.ExtensionContext): Pr
 
     // The notification only opens once the archive is actually being served, so
     // a release without this platform's archive does not flash one on every start.
-    let finish!: () => void;
-    const finished = new Promise<void>((resolve) => {
-        finish = resolve;
-    });
-    let notification: Promise<vscode.Progress<{ message?: string }>> | undefined;
-    const report = (message: string) => {
-        logger.info(message);
-        notification ??= new Promise((resolve) => {
-            void vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Notification, title: 'Hydrust Server', cancellable: false },
-                (progress) => {
-                    resolve(progress);
-                    return finished;
-                }
-            );
-        });
-        void notification.then((progress) => progress.report({ message }));
-    };
-
+    const progress = createLazyProgress('Hydrust Server');
     try {
-        const installedPath = await downloadServer(tag, context, report);
+        const installedPath = await downloadServer(tag, context, (message) => {
+            logger.info(message);
+            progress.report(message);
+        });
         return { path: installedPath, version: tag };
     } catch (err) {
         if (!(await fsapi.pathExists(executablePath))) {
@@ -824,7 +860,7 @@ async function installVersion(tag: string, context: vscode.ExtensionContext): Pr
         }
         throw err;
     } finally {
-        finish();
+        progress.finish();
     }
 }
 
