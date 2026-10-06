@@ -7,6 +7,7 @@ import { PATH_CANDIDATES } from './constants';
 import {
     DISPLAY_NAME,
     SERVER_ARGS,
+    ServerSource,
     ServerVersion,
     UNIFIED_BINARY_VERSION,
     compareServerVersions,
@@ -35,6 +36,10 @@ const recheckedUnknown = new Set<string>();
 
 /** `serverPath` settings already warned about this session, so restarts do not repeat the toast. */
 const warnedServerPaths = new Set<string>();
+
+/** Why a `hydrust` too old to be a language server is ignored. */
+const NOT_A_LANGUAGE_SERVER =
+    `not ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`;
 
 /**
  * A running server, together with what the extension knows about what it
@@ -85,6 +90,11 @@ function recheckUnknownOnce(binaryPath: string): boolean {
     return true;
 }
 
+/** A binary found by one of the resolution paths, with its probed version if any. */
+function resolved(binaryPath: string, source: ServerSource, version?: ServerVersion): ResolvedBinary {
+    return { path: binaryPath, source, version: version && formatServerVersion(version) };
+}
+
 /**
  * Look for a hydrust installed in the selected Python environment.
  */
@@ -105,14 +115,12 @@ async function findInPythonEnvironment(
     if (!isUsableServer(binaryPath, version)) {
         logger.warn(
             `Ignoring ${binaryPath} from ${interpreter}: ` +
-            (version
-                ? `not ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
-                : 'could not determine its version.')
+            (version ? NOT_A_LANGUAGE_SERVER : 'could not determine its version.')
         );
         return undefined;
     }
     logger.info(`Using ${binaryPath}, installed in the environment of ${interpreter}`);
-    return { path: binaryPath, source: 'pythonEnvironment', version: version && formatServerVersion(version) };
+    return resolved(binaryPath, 'pythonEnvironment', version);
 }
 
 /**
@@ -135,12 +143,9 @@ async function findBinaryPath(
             // Respect the user's choice unless the binary is known to be too old.
             if (isUsableServer(settings.path, version, true)) {
                 logger.info(`Using 'path' setting: ${settings.path}`);
-                return { path: settings.path, source: 'serverPath', version: version && formatServerVersion(version) };
+                return resolved(settings.path, 'serverPath', version);
             }
-            logger.warn(
-                `Ignoring 'path' setting ${settings.path}: not ${DISPLAY_NAME} ` +
-                `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
-            );
+            logger.warn(`Ignoring 'path' setting ${settings.path}: ${NOT_A_LANGUAGE_SERVER}`);
             if (!warnedServerPaths.has(settings.path)) {
                 warnedServerPaths.add(settings.path);
                 void vscode.window.showWarningMessage(
@@ -185,10 +190,7 @@ async function findBinaryPath(
                 const version = await probeBinaryVersion(environmentPath, context, probeTimeoutMs, recheck);
                 if (!isUsableServer(environmentPath, version)) {
                     if (version) {
-                        logger.info(
-                            `Ignoring ${environmentPath}: not ${DISPLAY_NAME} ` +
-                            `${formatServerVersion(UNIFIED_BINARY_VERSION)} or later, so not a language server.`
-                        );
+                        logger.info(`Ignoring ${environmentPath}: ${NOT_A_LANGUAGE_SERVER}`);
                     } else {
                         logger.warn(
                             `Ignoring ${environmentPath}: could not determine its version, so cannot tell ` +
@@ -208,11 +210,7 @@ async function findBinaryPath(
             }
             if (best) {
                 logger.info(`Using environment executable: ${best.path}`);
-                return {
-                    path: best.path,
-                    source: 'environment',
-                    version: best.version && formatServerVersion(best.version),
-                };
+                return resolved(best.path, 'environment', best.version);
             }
         } catch (err) {
             logger.debug(`Error checking PATH: ${err}`);

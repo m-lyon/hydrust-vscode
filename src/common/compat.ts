@@ -15,6 +15,7 @@ import {
     SETTING_COMPAT,
     ServerSource,
     ServerVersion,
+    UnsupportedEntry,
     advertisesPullDiagnostics,
     buildCompatReport,
     compareServerVersions,
@@ -52,6 +53,16 @@ const SOURCE_LABELS: Record<ServerSource, string> = {
     environment: 'found on PATH',
     bundled: 'downloaded by the extension',
 };
+
+/** Remembered `--version` results, by binary fingerprint. Null means the version could not be worked out. */
+function readProbeCache(context: vscode.ExtensionContext): Record<string, string | null> {
+    return context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {});
+}
+
+/** One feature as shown in the log, e.g. 'pullDiagnostics: yes'. */
+function formatFeature([name, available]: [string, boolean]): string {
+    return `${name}: ${available ? 'yes' : 'no'}`;
+}
 
 /**
  * Build the cache key for a binary: its path plus enough of its file stats to
@@ -143,17 +154,18 @@ export async function probeBinaryVersion(
     retryUnknown = false
 ): Promise<ServerVersion | undefined> {
     const fingerprint = await binaryFingerprint(binaryPath);
-    const cache = context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {});
 
-    if (fingerprint && !(retryUnknown && cache[fingerprint] === null) && Object.prototype.hasOwnProperty.call(cache, fingerprint)) {
-        const cached = cache[fingerprint];
-        if (cached === null) {
+    if (fingerprint) {
+        const cache = readProbeCache(context);
+        // Undefined when nothing is remembered for this binary.
+        const cached = Object.prototype.hasOwnProperty.call(cache, fingerprint) ? cache[fingerprint] : undefined;
+        if (cached === null && !retryUnknown) {
             logger.debug(`Version of ${binaryPath} is still unknown (remembered from an earlier check).`);
             // Rewrite it so using a binary keeps it alive in the cache.
             await rememberVersion(context, fingerprint, undefined);
             return undefined;
         }
-        const parsed = parseServerVersion(cached);
+        const parsed = parseServerVersion(cached ?? undefined);
         if (parsed) {
             logger.debug(`Version of ${binaryPath} is ${formatServerVersion(parsed)} (remembered).`);
             await rememberVersion(context, fingerprint, parsed);
@@ -187,7 +199,7 @@ async function rememberVersion(
     fingerprint: string,
     version: ServerVersion | undefined
 ): Promise<void> {
-    const existing = context.globalState.get<Record<string, string | null>>(PROBE_CACHE_KEY, {});
+    const existing = readProbeCache(context);
     const cache: Record<string, string | null> = {};
     for (const [key, value] of Object.entries(existing)) {
         if (key !== fingerprint) {
@@ -435,8 +447,8 @@ export class ServerCompat {
         for (const entry of this.report.unsupportedRules) {
             logger.warn(`Disabled rule '${entry.name}' has no effect: ${entry.reason}`);
         }
-        for (const [name, available] of Object.entries(this.report.features)) {
-            logger.debug(`Feature ${name}: ${available ? 'yes' : 'no'}`);
+        for (const feature of Object.entries(this.report.features)) {
+            logger.debug(`Feature ${formatFeature(feature)}`);
         }
     }
 
@@ -446,12 +458,12 @@ export class ServerCompat {
     }
 
     /** Settings the user changed that this server ignores. */
-    get unsupportedSettings(): readonly { name: string; reason: string }[] {
+    get unsupportedSettings(): readonly UnsupportedEntry[] {
         return this.report.unsupportedSettings;
     }
 
     /** Rule codes the user listed that this server ignores. */
-    get unsupportedRules(): readonly { name: string; reason: string }[] {
+    get unsupportedRules(): readonly UnsupportedEntry[] {
         return this.report.unsupportedRules;
     }
 
@@ -469,10 +481,7 @@ export class ServerCompat {
             `Capability source: ${this.report.authoritative ? 'reported by the server' : 'built-in version table'}`,
         ];
 
-        const featureNames = Object.entries(this.report.features).map(
-            ([name, available]) => `${name}: ${available ? 'yes' : 'no'}`
-        );
-        lines.push(`Features: ${featureNames.join(', ')}`);
+        lines.push(`Features: ${Object.entries(this.report.features).map(formatFeature).join(', ')}`);
 
         if (this.report.unsupportedSettings.length === 0 && this.report.unsupportedRules.length === 0) {
             lines.push('All configured settings are supported by this server.');
