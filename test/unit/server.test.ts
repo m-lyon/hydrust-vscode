@@ -193,7 +193,6 @@ function settingsFor(binaryPath: string, overrides: Partial<ExtensionSettings> =
         enableSemanticTokens: true,
         enableDiagnostics: true,
         numThreads: 0,
-        developerMode: false,
         ...overrides,
     };
 }

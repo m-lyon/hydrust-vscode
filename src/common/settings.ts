@@ -16,7 +16,7 @@ export interface ExtensionSettings {
     enableSemanticTokens: boolean;
     enableDiagnostics: boolean;
     numThreads: number;
-    developerMode: boolean;
+    // developerMode omitted here as callers use `isDeveloperMode` instead
 }
 
 /**
@@ -48,7 +48,6 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
         enableSemanticTokens: config.get<boolean>('enableSemanticTokens', true),
         enableDiagnostics: config.get<boolean>('enableDiagnostics', true),
         numThreads: config.get<number>('numThreads', 0),
-        developerMode: config.get<boolean>('developerMode', false),
     };
 }
 
