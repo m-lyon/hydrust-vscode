@@ -934,6 +934,8 @@ describe('the release pin script', () => {
         const script = [...tags].sort(compareTagsDesc);
         const extension = [...tags].sort((a, b) => compareVersionsDesc(a.replace(/^v/, ''), b.replace(/^v/, '')));
         expect(script).toEqual(extension);
+        // A leading 'v' is ignored, so tags and directory names sort alike.
+        expect([...tags].sort(compareVersionsDesc)).toEqual(script);
         expect(script.indexOf('v0.6.0')).toBeLessThan(script.indexOf('v0.6.0-hotfix.1'));
         expect(script.indexOf('v0.6.0-hotfix.1')).toBeLessThan(script.indexOf('v0.5.9'));
         expect(script.indexOf('v0.5.9')).toBeLessThan(script.indexOf('v0.5.9-rc'));
