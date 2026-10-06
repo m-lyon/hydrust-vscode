@@ -16,6 +16,7 @@ export interface ExtensionSettings {
     enableSemanticTokens: boolean;
     enableDiagnostics: boolean;
     numThreads: number;
+    // developerMode omitted here as callers use `isDeveloperMode` instead
 }
 
 /**
