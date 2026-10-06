@@ -8,7 +8,6 @@ export interface ExtensionSettings {
     interpreter: string;
     importStrategy: 'fromEnvironment' | 'useBundled';
     serverVersion: string;
-    traceServer: 'off' | 'messages' | 'verbose';
     disabledRules: string[];
     enableHover: boolean;
     enableCompletion: boolean;
@@ -41,7 +40,6 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
         interpreter: config.get<string>('pythonInterpreterPath', ''),
         importStrategy: config.get<'fromEnvironment' | 'useBundled'>('importStrategy', 'fromEnvironment'),
         serverVersion: config.get<string>('serverVersion', 'latest'),
-        traceServer: config.get<'off' | 'messages' | 'verbose'>('traceServer', 'off'),
         disabledRules: config.get<string[]>('disabledRules', []),
         enableHover: config.get<boolean>('enableHover', true),
         enableCompletion: config.get<boolean>('enableCompletion', true),
@@ -59,7 +57,7 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
  */
 export function checkIfConfigurationChanged(e: vscode.ConfigurationChangeEvent, serverId: string): boolean {
     const sections = [
-        'serverPath', 'pythonInterpreterPath', 'importStrategy', 'serverVersion', 'traceServer', 'disabledRules',
+        'serverPath', 'pythonInterpreterPath', 'importStrategy', 'serverVersion', 'disabledRules',
         'enableHover', 'enableCompletion', 'enableSignatureHelp',
         'enableGotoDefinition', 'enableSemanticTokens', 'enableDiagnostics',
         'numThreads', 'developerMode',
