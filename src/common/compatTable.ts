@@ -496,73 +496,64 @@ export interface CompatInput {
 }
 
 /**
- * Work out what the server will quietly ignore.
- *
- * The capability block wins whenever the server sent one: it is the server
- * telling us directly, so it replaces the version table completely. Without a
- * block the version table is used, falling back to the newest version that
- * predates the block when the version is unknown.
+ * Settings the user changed that the server will not read. Client-only
+ * settings such as hydrust.serverPath are never sent, so there is nothing for
+ * the server to support and they are skipped.
  */
-export function buildCompatReport(input: CompatInput): CompatReport {
-    const capabilities = input.capabilities;
-    const authoritative = capabilities !== undefined;
-    const effectiveVersion = input.version ?? ASSUMED_PRE_NEGOTIATION_VERSION;
+function findUnsupportedSettings(input: CompatInput, effectiveVersion: ServerVersion): UnsupportedEntry[] {
     const versionLabel = formatServerVersion(effectiveVersion);
+    const sent = input.configuredSettings
+        .map((configKey) => SETTING_COMPAT.find((setting) => setting.configKey === configKey))
+        .filter((entry): entry is SettingCompat => entry !== undefined);
 
-    const unsupportedSettings: UnsupportedEntry[] = [];
-    for (const configKey of input.configuredSettings) {
-        const entry = SETTING_COMPAT.find((setting) => setting.configKey === configKey);
-        if (!entry) {
-            // A client-only setting such as hydrust.serverPath. Never sent, so
-            // there is nothing for the server to support.
-            continue;
-        }
-        if (authoritative) {
-            const supported = capabilities.supportedSettings;
-            if (supported && !supported.includes(entry.key)) {
-                unsupportedSettings.push({
-                    name: entry.configKey,
-                    reason: `${DISPLAY_NAME} ${versionLabel} reports that it does not read '${entry.key}'.`,
-                });
-            }
-            continue;
-        }
+    if (input.capabilities) {
+        const supported = input.capabilities.supportedSettings;
+        return sent
+            .filter((entry) => supported && !supported.includes(entry.key))
+            .map((entry) => ({
+                name: entry.configKey,
+                reason: `${DISPLAY_NAME} ${versionLabel} reports that it does not read '${entry.key}'.`,
+            }));
+    }
+
+    const unsupported: UnsupportedEntry[] = [];
+    for (const entry of sent) {
         if (!entry.since) {
-            unsupportedSettings.push({
+            unsupported.push({
                 name: entry.configKey,
                 reason: `no released ${DISPLAY_NAME} reads '${entry.key}', so this setting does nothing.`,
             });
-            continue;
-        }
-        if (!isAtLeast(effectiveVersion, entry.since)) {
-            unsupportedSettings.push({
+        } else if (!isAtLeast(effectiveVersion, entry.since)) {
+            unsupported.push({
                 name: entry.configKey,
                 reason: `needs ${DISPLAY_NAME} ${formatServerVersion(entry.since)} or later; ${versionLabel} ignores it.`,
             });
         }
     }
+    return unsupported;
+}
 
-    // If the server does not read disabledRules at all there is no point
-    // listing each individual rule as well; the one line covers it.
-    const disabledRulesIgnored = unsupportedSettings.some((entry) => entry.name === 'disabledRules');
+/** Rule codes the user listed in hydrust.disabledRules that the server will not recognise. */
+function findUnsupportedRules(input: CompatInput, effectiveVersion: ServerVersion): UnsupportedEntry[] {
+    const versionLabel = formatServerVersion(effectiveVersion);
+
+    if (input.capabilities) {
+        const supported = input.capabilities.supportedRules;
+        return input.configuredRules
+            .filter((code) => supported && !supported.includes(code))
+            .map((code) => ({
+                name: code,
+                reason: `${DISPLAY_NAME} ${versionLabel} does not know this rule code, so the entry does nothing.`,
+            }));
+    }
 
     const rewrittenCodes = new Set((input.appliedRuleRewrites ?? []).map((rewrite) => rewrite.from));
 
-    const unsupportedRules: UnsupportedEntry[] = [];
-    for (const code of disabledRulesIgnored ? [] : input.configuredRules) {
-        if (authoritative) {
-            const supported = capabilities.supportedRules;
-            if (supported && !supported.includes(code)) {
-                unsupportedRules.push({
-                    name: code,
-                    reason: `${DISPLAY_NAME} ${versionLabel} does not know this rule code, so the entry does nothing.`,
-                });
-            }
-            continue;
-        }
+    const unsupported: UnsupportedEntry[] = [];
+    for (const code of input.configuredRules) {
         const entry = RULE_COMPAT.find((rule) => rule.code === code);
         if (!entry) {
-            unsupportedRules.push({
+            unsupported.push({
                 name: code,
                 reason: 'not a rule code this extension knows about, so no server will match it.',
             });
@@ -577,7 +568,7 @@ export function buildCompatReport(input: CompatInput): CompatReport {
                 // rule is switched off and there is nothing to report.
                 continue;
             }
-            unsupportedRules.push({
+            unsupported.push({
                 name: code,
                 reason:
                     `${DISPLAY_NAME} ${versionLabel} calls this rule '${entry.previousCode}', and the ` +
@@ -586,17 +577,36 @@ export function buildCompatReport(input: CompatInput): CompatReport {
             });
             continue;
         }
-        unsupportedRules.push({
+        unsupported.push({
             name: code,
             reason: `added in ${DISPLAY_NAME} ${formatServerVersion(entry.since)}; ${versionLabel} ignores it.`,
         });
     }
+    return unsupported;
+}
 
+/** Feature name to whether the server has it. */
+function findFeatures(input: CompatInput, effectiveVersion: ServerVersion): Record<string, boolean> {
     const features: Record<string, boolean> = {};
+    const reported = input.capabilities?.features;
+
+    if (reported) {
+        for (const feature of FEATURE_COMPAT) {
+            features[feature.name] = reported.includes(feature.name);
+        }
+        // Servers are free to add feature names without bumping the protocol
+        // version, so carry through anything this extension has not heard of
+        // rather than dropping it.
+        for (const name of reported) {
+            if (!Object.prototype.hasOwnProperty.call(features, name)) {
+                features[name] = true;
+            }
+        }
+        return features;
+    }
+
     for (const feature of FEATURE_COMPAT) {
-        if (authoritative && capabilities.features) {
-            features[feature.name] = capabilities.features.includes(feature.name);
-        } else if (feature.name === FEATURE_PULL_DIAGNOSTICS && input.pullDiagnosticsAdvertised !== undefined) {
+        if (feature.name === FEATURE_PULL_DIAGNOSTICS && input.pullDiagnosticsAdvertised !== undefined) {
             // The standard diagnosticProvider field is reliable on every
             // version, so prefer it over guessing from the version number.
             features[feature.name] = input.pullDiagnosticsAdvertised;
@@ -604,23 +614,35 @@ export function buildCompatReport(input: CompatInput): CompatReport {
             features[feature.name] = isAtLeast(effectiveVersion, feature.since);
         }
     }
-    // Servers are free to add feature names without bumping the protocol
-    // version, so carry through anything this extension has not heard of rather
-    // than dropping it.
-    for (const name of capabilities?.features ?? []) {
-        if (!Object.prototype.hasOwnProperty.call(features, name)) {
-            features[name] = true;
-        }
-    }
+    return features;
+}
 
-    const protocolVersion = capabilities?.protocolVersion;
+/**
+ * Work out what the server will quietly ignore.
+ *
+ * The capability block wins whenever the server sent one: it is the server
+ * telling us directly, so it replaces the version table completely. Without a
+ * block the version table is used, falling back to the newest version that
+ * predates the block when the version is unknown.
+ */
+export function buildCompatReport(input: CompatInput): CompatReport {
+    const effectiveVersion = input.version ?? ASSUMED_PRE_NEGOTIATION_VERSION;
+
+    const unsupportedSettings = findUnsupportedSettings(input, effectiveVersion);
+
+    // If the server does not read disabledRules at all there is no point
+    // listing each individual rule as well; the one line covers it.
+    const disabledRulesIgnored = unsupportedSettings.some((entry) => entry.name === 'disabledRules');
+    const unsupportedRules = disabledRulesIgnored ? [] : findUnsupportedRules(input, effectiveVersion);
+
+    const protocolVersion = input.capabilities?.protocolVersion;
     const protocolNewerThanClient = protocolVersion !== undefined && protocolVersion > CLIENT_PROTOCOL_VERSION;
 
     return {
         unsupportedSettings,
         unsupportedRules,
-        features,
-        authoritative,
+        features: findFeatures(input, effectiveVersion),
+        authoritative: input.capabilities !== undefined,
         protocolNewerThanClient,
     };
 }

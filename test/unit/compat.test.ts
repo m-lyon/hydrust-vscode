@@ -167,7 +167,7 @@ describe('the --version probe', () => {
                 undefined,
                 asExtensionContext(context),
                 // Shortened from the production 2000ms so the suite stays fast.
-                75
+                { timeoutMs: 75 }
             );
             const elapsed = Date.now() - started;
 
@@ -226,7 +226,7 @@ describe('the probe cache', () => {
             // Deliberately longer than the test would tolerate. Reaching the
             // spawn at all would blow the timeout, so returning quickly is the
             // proof that the cache was used.
-            30000
+            { timeoutMs: 30000 }
         );
 
         expect(compat.versionLabel).toBe('unknown version');
@@ -237,7 +237,7 @@ describe('the probe cache', () => {
         const script = writeScript('slow-first-server', 'echo "hydrust 0.5.0"');
         stub.globalState.set(PROBE_CACHE_KEY, { [fingerprintOf(script)]: null });
 
-        const version = await probeBinaryVersion(script, asExtensionContext(context), undefined, true);
+        const version = await probeBinaryVersion(script, asExtensionContext(context), { retryUnknown: true });
 
         expect(version).toBeDefined();
         expect(probeCache()[fingerprintOf(script)]).toBe('v0.5.0');
@@ -265,7 +265,7 @@ describe('the probe cache', () => {
         const file = writeUnrunnableFile('opaque-server');
         stub.globalState.set(PROBE_CACHE_KEY, { [fingerprintOf(file)]: 'v0.2.0' });
 
-        const version = await probeBinaryVersion(file, asExtensionContext(context), undefined, true);
+        const version = await probeBinaryVersion(file, asExtensionContext(context), { retryUnknown: true });
 
         expect(version).toEqual({ major: 0, minor: 2, patch: 0 });
     });
