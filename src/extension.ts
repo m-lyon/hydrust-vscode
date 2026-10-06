@@ -68,8 +68,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         try {
             if (lsClient) {
-                await stopServer(lsClient);
-                lsClient = undefined;
+                await stopCurrentClient();
                 await compatReporter.update(undefined);
             }
 
@@ -104,8 +103,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 // Deactivation happened while this start was in flight, after
                 // it was too late to bail out. Stop what was just created
                 // rather than leaving it running with nobody to stop it.
-                await stopServer(lsClient);
-                lsClient = undefined;
+                await stopCurrentClient();
                 return;
             }
 
@@ -126,20 +124,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Listen for Python interpreter changes from ms-python extension
     try {
-        const pythonExtension = vscode.extensions.getExtension('ms-python.python');
-        if (pythonExtension) {
-            if (!pythonExtension.isActive) {
-                await pythonExtension.activate();
-            }
-            const pythonApi = pythonExtension.exports;
-            if (pythonApi?.environments?.onDidChangeActiveEnvironmentPath) {
-                context.subscriptions.push(
-                    pythonApi.environments.onDidChangeActiveEnvironmentPath(async () => {
-                        logger.info('Python environment changed, restarting server...');
-                        await runServer();
-                    }),
-                );
-            }
+        const pythonApi = await getPythonApi();
+        if (pythonApi?.environments?.onDidChangeActiveEnvironmentPath) {
+            context.subscriptions.push(
+                pythonApi.environments.onDidChangeActiveEnvironmentPath(async () => {
+                    logger.info('Python environment changed, restarting server...');
+                    await runServer();
+                }),
+            );
         }
     } catch (error) {
         logger.warn(`Failed to register Python environment change listener: ${error}`);
@@ -187,28 +179,42 @@ export async function deactivate(): Promise<void> {
         await pendingRun.catch(() => undefined);
         pendingRun = undefined;
     }
+    await stopCurrentClient();
+    // The output channels, commands and listeners are disposed through
+    // context.subscriptions, so there is nothing extra to tear down here.
+}
+
+/** Stop the running client, if there is one, and forget it. */
+async function stopCurrentClient(): Promise<void> {
     if (lsClient) {
         await stopServer(lsClient);
         lsClient = undefined;
     }
-    // The output channels, commands and listeners are disposed through
-    // context.subscriptions, so there is nothing extra to tear down here.
+}
+
+/**
+ * The API of the ms-python.python extension, activating it first if needed,
+ * or undefined when it is not installed.
+ */
+async function getPythonApi() {
+    const pythonExtension = vscode.extensions.getExtension('ms-python.python');
+    if (!pythonExtension) {
+        return undefined;
+    }
+    if (!pythonExtension.isActive) {
+        await pythonExtension.activate();
+    }
+    return pythonExtension.exports;
 }
 
 // Add this function to get the Python interpreter
 async function getPythonInterpreter(): Promise<string | undefined> {
     try {
-        const pythonExtension = vscode.extensions.getExtension('ms-python.python');
-        if (!pythonExtension) {
+        const pythonApi = await getPythonApi();
+        if (!pythonApi) {
             logger.warn('Python extension not found');
             return undefined;
         }
-
-        if (!pythonExtension.isActive) {
-            await pythonExtension.activate();
-        }
-
-        const pythonApi = pythonExtension.exports;
 
         // Get the active environment path
         const activeEnvPath = pythonApi.environments.getActiveEnvironmentPath();

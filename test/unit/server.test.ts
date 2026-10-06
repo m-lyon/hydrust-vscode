@@ -207,7 +207,7 @@ function start(settings: ExtensionSettings, projectRoot?: string) {
         outputChannel,
         asExtensionContext(context),
         projectRoot,
-        PROBE_TIMEOUT_MS
+        { timeoutMs: PROBE_TIMEOUT_MS }
     );
 }
 
