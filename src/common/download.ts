@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
 import type { IncomingHttpHeaders, IncomingMessage } from 'http';
 import { pipeline } from 'stream/promises';
 import { promisify } from 'util';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { logger } from './logger';
 import {
     FALLBACK_SERVER_VERSION,
@@ -25,7 +25,7 @@ import {
 import { fsapi } from './vscodeapi';
 import { isDeveloperMode } from './settings';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /** globalState key holding the tag `latest` last resolved to, and when. */
 export const LATEST_TAG_CACHE_KEY = 'hydrust.latestServerTag.v1';
@@ -270,6 +270,23 @@ async function verifyChecksum(filePath: string, checksumUrl: string): Promise<bo
 }
 
 /**
+ * Quote a value as a PowerShell single-quoted string literal, in which nothing
+ * is expanded. PowerShell also treats the curly quotes as single quotes.
+ */
+export function quotePowerShellLiteral(value: string): string {
+    return `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&')}'`;
+}
+
+/**
+ * Run an extraction tool without a shell, so paths are passed through untouched.
+ */
+async function runExtractor(file: string, args: string[]): Promise<void> {
+    await execFileAsync(file, args, {
+        maxBuffer: 1024 * 1024 * 100, // 100MB
+    });
+}
+
+/**
  * Extract tar.xz archive
  */
 async function extractTarXz(archivePath: string, destDir: string): Promise<void> {
@@ -277,9 +294,7 @@ async function extractTarXz(archivePath: string, destDir: string): Promise<void>
 
     try {
         // Extract archive with nested directory structure
-        await execAsync(`tar -xJf "${archivePath}" -C "${destDir}"`, {
-            maxBuffer: 1024 * 1024 * 100, // 100MB
-        });
+        await runExtractor('tar', ['-xJf', archivePath, '-C', destDir]);
     } catch (err) {
         logger.error(`Failed to extract with tar: ${err}`);
         throw new Error(`Failed to extract archive: ${err}`);
@@ -294,15 +309,18 @@ async function extractZip(archivePath: string, destDir: string): Promise<void> {
 
     try {
         if (isWindows()) {
-            // Use PowerShell on Windows
-            await execAsync(`powershell -command "Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force"`, {
-                maxBuffer: 1024 * 1024 * 100, // 100MB
-            });
+            // Use .NET's ZipFile through PowerShell on Windows. Expand-Archive tests the
+            // destination with wildcard matching, so a path containing [ ] breaks it.
+            // extractServerArchive empties destDir first, so nothing needs overwriting.
+            const command =
+                `$ErrorActionPreference = 'Stop'; ` +
+                `Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
+                `[System.IO.Compression.ZipFile]::ExtractToDirectory(` +
+                `${quotePowerShellLiteral(archivePath)}, ${quotePowerShellLiteral(destDir)})`;
+            await runExtractor('powershell', ['-NoProfile', '-NonInteractive', '-Command', command]);
         } else {
             // Use unzip on Unix systems
-            await execAsync(`unzip -o "${archivePath}" -d "${destDir}"`, {
-                maxBuffer: 1024 * 1024 * 100, // 100MB
-            });
+            await runExtractor('unzip', ['-o', archivePath, '-d', destDir]);
         }
     } catch (err) {
         logger.error(`Failed to extract zip: ${err}`);

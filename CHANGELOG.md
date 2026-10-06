@@ -3,6 +3,7 @@
 ## [0.2.0]
 
 - **Breaking:** renamed the `hydrust.traceServer` setting to `hydrust.trace.server`. The old setting never had any effect, so tracing now works; move any existing value to the new key.
+- Fixed server install failing when the extension's storage path contains an apostrophe (e.g. a Windows user named `O'Brien`), `$`, a backtick or brackets
 
 ## [0.1.10]
 
