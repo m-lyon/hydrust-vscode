@@ -18,6 +18,7 @@ import {
     getArchiveFileNameCandidates,
     getArchiveDirectoryName,
     getVersionedDir,
+    versionDirName,
     getExecutablePath,
     getLibsRoot,
     isWindows,
@@ -510,7 +511,7 @@ async function resolveLatestFromApi(context: vscode.ExtensionContext): Promise<s
 
     const newestFirst = releases
         .filter((release) => typeof release?.tag_name === 'string' && TAG_PATTERN.test(release.tag_name))
-        .sort((a, b) => compareVersionsDesc(a.tag_name.replace(/^v/, ''), b.tag_name.replace(/^v/, '')));
+        .sort((a, b) => compareVersionsDesc(a.tag_name, b.tag_name));
     for (const release of newestFirst) {
         if (release.draft || release.prerelease || !Array.isArray(release.assets)) {
             continue;
@@ -585,15 +586,17 @@ async function newestMtime(dir: string): Promise<number> {
     return newest;
 }
 
+/** The names in the libs directory, or none if it cannot be read. */
+async function listLibsRoot(libsRoot: string): Promise<string[]> {
+    return fs.readdir(libsRoot).catch((err) => {
+        logger.debug(`Could not read ${libsRoot}: ${err}`);
+        return [];
+    });
+}
+
 /** Remove staging directories left behind by installs that never finished. */
 async function removeStaleStagingDirs(libsRoot: string): Promise<void> {
-    let entries: string[];
-    try {
-        entries = await fs.readdir(libsRoot);
-    } catch {
-        return;
-    }
-    for (const entry of entries) {
+    for (const entry of await listLibsRoot(libsRoot)) {
         if (!entry.startsWith('.staging-')) {
             continue;
         }
@@ -619,13 +622,7 @@ async function removeStaleStagingDirs(libsRoot: string): Promise<void> {
  */
 async function pruneOldVersions(context: vscode.ExtensionContext, keep: string): Promise<void> {
     const libsRoot = getLibsRoot(context);
-    let entries: string[];
-    try {
-        entries = await fs.readdir(libsRoot);
-    } catch {
-        return;
-    }
-    const others = entries.filter((entry) => !entry.startsWith('.') && entry !== keep).sort(compareVersionsDesc);
+    const others = (await listLibsRoot(libsRoot)).filter((entry) => !entry.startsWith('.') && entry !== keep).sort(compareVersionsDesc);
     // Spare the newest usable install, not merely the newest directory.
     let spared: string | undefined;
     for (const entry of others) {
@@ -670,7 +667,7 @@ async function downloadServer(
     // only this attempt uses and move it into place once it is complete.
     const stagingDir = path.join(
         getLibsRoot(context),
-        `.staging-${path.basename(versionedDir)}-${crypto.randomBytes(6).toString('hex')}`
+        `.staging-${versionDirName(resolvedVersion)}-${crypto.randomBytes(6).toString('hex')}`
     );
     const stagingExecutablePath = path.join(stagingDir, path.relative(versionedDir, getExecutablePath(context, resolvedVersion)));
 
@@ -762,7 +759,7 @@ async function downloadServer(
         }
 
         progress(`Hydrust Server ${resolvedVersion} installed successfully`);
-        await pruneOldVersions(context, path.basename(versionedDir));
+        await pruneOldVersions(context, versionDirName(resolvedVersion));
         return executablePath;
     } catch (err) {
         logger.error(`Failed to download server: ${err}`);
@@ -831,6 +828,17 @@ async function installVersion(tag: string, context: vscode.ExtensionContext): Pr
     }
 }
 
+/** The tag in a time-stamped globalState entry, if it was written within the last `ttlMs`. */
+function recentTag(context: vscode.ExtensionContext, key: string, ttlMs: number): string | undefined {
+    const entry = context.globalState.get<CachedLatestTag>(key);
+    return entry && Date.now() - entry.checkedAt < ttlMs ? entry.tag : undefined;
+}
+
+/** Store a tag in a globalState entry, time-stamped for recentTag. */
+function stampTag(context: vscode.ExtensionContext, key: string, tag: string): Thenable<void> {
+    return context.globalState.update(key, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
+}
+
 /**
  * Find a server for the `latest` setting, trying in order:
  *
@@ -844,24 +852,22 @@ async function installVersion(tag: string, context: vscode.ExtensionContext): Pr
  * fell back to 4 or 5 tries GitHub again next time.
  */
 async function ensureLatest(context: vscode.ExtensionContext): Promise<InstalledServer> {
-    const cached = context.globalState.get<CachedLatestTag>(LATEST_TAG_CACHE_KEY);
-    if (cached && Date.now() - cached.checkedAt < LATEST_TAG_TTL_MS) {
-        const executablePath = getExecutablePath(context, cached.tag);
-        const usedAt = await markVersionUsed(context, cached.tag);
+    const cachedTag = recentTag(context, LATEST_TAG_CACHE_KEY, LATEST_TAG_TTL_MS);
+    if (cachedTag) {
+        const executablePath = getExecutablePath(context, cachedTag);
+        const usedAt = await markVersionUsed(context, cachedTag);
         if (await fsapi.pathExists(executablePath)) {
-            logger.info(`Using ${cached.tag}, resolved as the latest release within the last day.`);
-            return { path: executablePath, version: cached.tag };
+            logger.info(`Using ${cachedTag}, resolved as the latest release within the last day.`);
+            return { path: executablePath, version: cachedTag };
         }
-        await forgetVersionUsed(context, cached.tag, usedAt);
+        await forgetVersionUsed(context, cachedTag, usedAt);
     }
 
     const useResolved = async (tag: string): Promise<InstalledServer> => {
-        const failed = context.globalState.get<CachedLatestTag>(FAILED_INSTALL_KEY);
-        if (failed?.tag === tag && Date.now() - failed.checkedAt < FAILED_INSTALL_TTL_MS) {
+        if (recentTag(context, FAILED_INSTALL_KEY, FAILED_INSTALL_TTL_MS) === tag) {
             throw new Error(`installing ${tag} failed recently; not retrying yet`);
         }
-        const missing = context.globalState.get<CachedLatestTag>(MISSING_ASSET_KEY);
-        if (missing?.tag === tag && Date.now() - missing.checkedAt < MISSING_ASSET_TTL_MS) {
+        if (recentTag(context, MISSING_ASSET_KEY, MISSING_ASSET_TTL_MS) === tag) {
             throw new AssetNotFoundError(`${tag} recently had no archive for this platform`);
         }
         let installed: InstalledServer;
@@ -869,21 +875,18 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
             installed = await installVersion(tag, context);
         } catch (err) {
             if (err instanceof AssetNotFoundError) {
-                await context.globalState.update(MISSING_ASSET_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
+                await stampTag(context, MISSING_ASSET_KEY, tag);
             } else if (!(err instanceof NetworkError)) {
-                await context.globalState.update(FAILED_INSTALL_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
+                await stampTag(context, FAILED_INSTALL_KEY, tag);
             }
             throw err;
         }
-        await context.globalState.update(LATEST_TAG_CACHE_KEY, { tag, checkedAt: Date.now() } satisfies CachedLatestTag);
+        await stampTag(context, LATEST_TAG_CACHE_KEY, tag);
         return installed;
     };
 
     let firstError: unknown;
-    const missing = context.globalState.get<CachedLatestTag>(MISSING_ASSET_KEY);
-    const redirectTag = missing && Date.now() - missing.checkedAt < MISSING_ASSET_TTL_MS
-        ? missing.tag
-        : await resolveLatestFromRedirect();
+    const redirectTag = recentTag(context, MISSING_ASSET_KEY, MISSING_ASSET_TTL_MS) ?? (await resolveLatestFromRedirect());
     if (redirectTag) {
         try {
             return await useResolved(redirectTag);
@@ -933,7 +936,7 @@ async function ensureLatest(context: vscode.ExtensionContext): Promise<Installed
  * unless another window has since recorded its own use of it.
  */
 async function forgetVersionUsed(context: vscode.ExtensionContext, version: string, usedAt: number): Promise<void> {
-    const key = versionLastUsedKey(path.basename(getVersionedDir(context, version)));
+    const key = versionLastUsedKey(versionDirName(version));
     if (context.globalState.get<number>(key) === usedAt) {
         await context.globalState.update(key, undefined);
     }
@@ -944,9 +947,8 @@ async function forgetVersionUsed(context: vscode.ExtensionContext, version: stri
  * Called whenever the server is (re)started, including from a fallback binary.
  */
 export async function markVersionUsed(context: vscode.ExtensionContext, version: string): Promise<number> {
-    const dir = path.basename(getVersionedDir(context, version));
     const usedAt = Date.now();
-    await context.globalState.update(versionLastUsedKey(dir), usedAt);
+    await context.globalState.update(versionLastUsedKey(versionDirName(version)), usedAt);
     return usedAt;
 }
 
@@ -982,10 +984,12 @@ export function ensureServer(
 }
 
 /**
- * Compare two version directory names (without 'v' prefix) descending.
+ * Compare two versions descending, as tags or directory names: a leading 'v' is ignored.
  * Semver-aware on numeric segments; falls back to localeCompare for non-numeric tags.
+ * Mirrored by compareTagsDesc in scripts/pin-server-version.mjs.
  */
-export function compareVersionsDesc(a: string, b: string): number {
+export function compareVersionsDesc(tagA: string, tagB: string): number {
+    const [a, b] = [versionDirName(tagA), versionDirName(tagB)];
     // Only the leading dotted numbers are the version; anything after is a
     // prerelease/build label ranking below the plain version (0.5.9 > 0.5.9-rc.2).
     const parse = (v: string): { segs: number[]; suffix: string } | null => {
@@ -1025,18 +1029,8 @@ export function compareVersionsDesc(a: string, b: string): number {
 export async function findExistingExecutable(
     context: vscode.ExtensionContext
 ): Promise<InstalledServer | undefined> {
-    const libsRoot = getLibsRoot(context);
-
-    let entries: string[];
-    try {
-        entries = await fs.readdir(libsRoot);
-    } catch (err) {
-        logger.debug(`No libs directory to scan for fallback: ${err}`);
-        return undefined;
-    }
-
     const candidates: { version: string; execPath: string }[] = [];
-    for (const entry of entries) {
+    for (const entry of await listLibsRoot(getLibsRoot(context))) {
         if (entry.startsWith('.')) {
             continue;
         }

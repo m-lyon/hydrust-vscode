@@ -179,13 +179,16 @@ export function getLibsRoot(context: ExtensionPaths): string {
     return path.join(context.globalStorageUri.fsPath, 'libs');
 }
 
+/** The name of a version's directory under `libs/`: the tag without its 'v' prefix. */
+export function versionDirName(version: string): string {
+    return version.startsWith('v') ? version.slice(1) : version;
+}
+
 /**
  * Get the versioned directory path for a specific version
  */
 export function getVersionedDir(context: ExtensionPaths, version: string): string {
-    // Normalize version (remove 'v' prefix for directory name)
-    const normalizedVersion = version.startsWith('v') ? version.slice(1) : version;
-    return path.join(getLibsRoot(context), normalizedVersion);
+    return path.join(getLibsRoot(context), versionDirName(version));
 }
 
 /**
