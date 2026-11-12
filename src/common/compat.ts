@@ -142,16 +142,22 @@ function runVersionFlag(binaryPath: string, timeoutMs: number = PROBE_TIMEOUT_MS
     });
 }
 
+/** How to ask a binary for its version. */
+export interface ProbeOptions {
+    /** Only the tests set this, to make a hang happen quickly. See runVersionFlag. */
+    timeoutMs?: number;
+    /** Ignore a remembered failure and ask the binary again. */
+    retryUnknown?: boolean;
+}
+
 /**
  * Work out the version of a binary, remembering the answer so restarts do not
- * keep spawning processes. `retryUnknown` ignores a remembered failure and
- * asks the binary again.
+ * keep spawning processes.
  */
 export async function probeBinaryVersion(
     binaryPath: string,
     context: vscode.ExtensionContext,
-    timeoutMs?: number,
-    retryUnknown = false
+    { timeoutMs, retryUnknown = false }: ProbeOptions = {}
 ): Promise<ServerVersion | undefined> {
     const fingerprint = await binaryFingerprint(binaryPath);
 
@@ -311,8 +317,8 @@ export class ServerCompat {
      * tag, or a probe made while choosing the binary), no process is spawned.
      * Otherwise the binary has to be asked itself.
      *
-     * `probeTimeoutMs` only exists so the tests can make the `--version` probe
-     * give up quickly. The extension never passes it.
+     * `probe` only exists so the tests can make the `--version` probe give up
+     * quickly. The extension never passes it.
      */
     static async beforeLaunch(
         binary: ResolvedBinary,
@@ -320,7 +326,7 @@ export class ServerCompat {
         disabledRules: string[],
         projectRoot: string | undefined,
         context: vscode.ExtensionContext,
-        probeTimeoutMs?: number
+        probe: ProbeOptions = {}
     ): Promise<ServerCompat> {
         const resource = projectRoot ? vscode.Uri.file(projectRoot) : undefined;
         const configuredSettings = findConfiguredSettings(serverId, resource);
@@ -329,7 +335,7 @@ export class ServerCompat {
         if (version) {
             logger.info(`Server version ${formatServerVersion(version)} (${SOURCE_LABELS[binary.source]}).`);
         } else {
-            version = await probeBinaryVersion(binary.path, context, probeTimeoutMs);
+            version = await probeBinaryVersion(binary.path, context, probe);
         }
 
         if (!version) {

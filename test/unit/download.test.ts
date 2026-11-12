@@ -99,7 +99,9 @@ import {
     ensureServer,
     extractServerArchive,
     findExistingExecutable,
+    isRateLimited,
     markVersionUsed,
+    pickReleaseForPlatform,
     quotePowerShellLiteral,
     rateLimitRetryTime,
     versionLastUsedKey,
@@ -864,6 +866,66 @@ describe('rateLimitRetryTime', () => {
         expect(rateLimitRetryTime({ 'retry-after': '99999999' }, now)).toBe(now + MAX_API_BACKOFF_MS);
         expect(rateLimitRetryTime({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(now / 1000 + 86_400 * 365) }, now))
             .toBe(now + MAX_API_BACKOFF_MS);
+    });
+});
+
+describe('isRateLimited', () => {
+    it('treats every 429 as a rate limit', () => {
+        expect(isRateLimited(429, {}, '')).toBe(true);
+    });
+
+    it('treats a 403 as a rate limit when a header or the body says so', () => {
+        expect(isRateLimited(403, { 'x-ratelimit-remaining': '0' }, '')).toBe(true);
+        expect(isRateLimited(403, { 'retry-after': '60' }, '')).toBe(true);
+        expect(isRateLimited(403, {}, '{"message":"You have exceeded a secondary Rate Limit."}')).toBe(true);
+    });
+
+    it('treats any other 403 as an ordinary failure', () => {
+        expect(isRateLimited(403, { 'x-ratelimit-remaining': '12' }, '{"message":"Forbidden"}')).toBe(false);
+        expect(isRateLimited(403, {}, undefined)).toBe(false);
+    });
+
+    it('ignores rate-limit headers on other statuses', () => {
+        expect(isRateLimited(200, { 'x-ratelimit-remaining': '0', 'retry-after': '60' }, 'rate limit')).toBe(false);
+    });
+});
+
+describe('pickReleaseForPlatform', () => {
+    const info = getPlatformInfo();
+    const release = (tag_name: string, extra: object = {}) =>
+        ({ tag_name, assets: [{ name: getArchiveFileName(info, tag_name) }], ...extra });
+
+    it('picks the newest release whatever order the listing is in', () => {
+        const releases = [release('v0.3.0'), release('v0.10.0'), release('v0.4.0')];
+        expect(pickReleaseForPlatform(releases, info)).toBe('v0.10.0');
+    });
+
+    it('skips drafts and prereleases', () => {
+        const releases = [
+            release('v0.6.0', { draft: true }),
+            release('v0.5.0', { prerelease: true }),
+            release('v0.4.0'),
+        ];
+        expect(pickReleaseForPlatform(releases, info)).toBe('v0.4.0');
+    });
+
+    it('skips a release without an archive for this platform', () => {
+        const releases = [
+            { tag_name: 'v0.5.0', assets: [{ name: 'hydrust-some-other-platform.tar.xz' }] },
+            { tag_name: 'v0.4.5' },
+            release('v0.4.0'),
+        ];
+        expect(pickReleaseForPlatform(releases, info)).toBe('v0.4.0');
+    });
+
+    it('ignores tags that are not plain versions', () => {
+        const releases = [release('nightly'), { tag_name: 7 }, release('v0.4.0')];
+        expect(pickReleaseForPlatform(releases, info)).toBe('v0.4.0');
+    });
+
+    it('returns undefined when no release fits', () => {
+        expect(pickReleaseForPlatform([release('v0.5.0', { prerelease: true })], info)).toBeUndefined();
+        expect(pickReleaseForPlatform([], info)).toBeUndefined();
     });
 });
 
