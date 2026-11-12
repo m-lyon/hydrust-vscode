@@ -15,7 +15,7 @@ import {
     isAtLeast,
 } from './compatTable';
 import { ExtensionSettings } from './settings';
-import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
+import { InvalidServerVersionError, ensureServer, findExistingExecutable, isLatestVersion, markVersionUsed } from './download';
 import { ProbeOptions, ResolvedBinary, ServerCompat, probeBinaryVersion } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
@@ -229,8 +229,7 @@ async function findBundled(serverVersion: string, context: vscode.ExtensionConte
         // downloaded binary on disk so the extension can still start.
         logger.warn(`ensureServer failed: ${err}`);
         // `latest` already falls back to installed binaries inside ensureServer.
-        const isLatest = serverVersion === 'latest' || !serverVersion;
-        const cached = isLatest ? undefined : await findExistingExecutable(context);
+        const cached = isLatestVersion(serverVersion) ? undefined : await findExistingExecutable(context);
         if (cached) {
             logger.warn(`Falling back to previously installed binary: ${cached.path}`);
             await markVersionUsed(context, cached.version);
