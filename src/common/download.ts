@@ -411,10 +411,7 @@ function uncappedRetryTime(headers: IncomingHttpHeaders, now: number): number {
     return now + MIN_API_BACKOFF_MS;
 }
 
-/**
- * Whether a GitHub API response is a rate-limit rejection. `body` is undefined
- * when it could not be read.
- */
+
 export function isRateLimited(status: number, headers: IncomingHttpHeaders, body: string | undefined): boolean {
     // Secondary rate limits can return a 403 with neither header; only the body says so.
     return (
@@ -426,7 +423,7 @@ export function isRateLimited(status: number, headers: IncomingHttpHeaders, body
     );
 }
 
-/** The fields read from an entry in the GitHub releases API response. */
+
 interface ApiRelease {
     tag_name?: unknown;
     draft?: boolean;
@@ -434,11 +431,7 @@ interface ApiRelease {
     assets?: { name: string }[];
 }
 
-/**
- * The tag of the newest published release, out of a GitHub releases API
- * listing, that has an archive for this platform under the name this extension
- * will download.
- */
+
 export function pickReleaseForPlatform(releases: readonly ApiRelease[], platformInfo: PlatformInfo): string | undefined {
     // Either name is accepted, because the scan is what decides the version and
     // so there is nothing to key the name off yet.

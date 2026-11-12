@@ -585,7 +585,7 @@ function findUnsupportedRules(input: CompatInput, effectiveVersion: ServerVersio
     return unsupported;
 }
 
-/** Feature name to whether the server has it. */
+
 function findFeatures(input: CompatInput, effectiveVersion: ServerVersion): Record<string, boolean> {
     const features: Record<string, boolean> = {};
     const reported = input.capabilities?.features;
@@ -617,14 +617,7 @@ function findFeatures(input: CompatInput, effectiveVersion: ServerVersion): Reco
     return features;
 }
 
-/**
- * Work out what the server will quietly ignore.
- *
- * The capability block wins whenever the server sent one: it is the server
- * telling us directly, so it replaces the version table completely. Without a
- * block the version table is used, falling back to the newest version that
- * predates the block when the version is unknown.
- */
+
 export function buildCompatReport(input: CompatInput): CompatReport {
     const effectiveVersion = input.version ?? ASSUMED_PRE_NEGOTIATION_VERSION;
 

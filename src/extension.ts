@@ -180,11 +180,9 @@ export async function deactivate(): Promise<void> {
         pendingRun = undefined;
     }
     await stopCurrentClient();
-    // The output channels, commands and listeners are disposed through
-    // context.subscriptions, so there is nothing extra to tear down here.
 }
 
-/** Stop the running client, if there is one, and forget it. */
+
 async function stopCurrentClient(): Promise<void> {
     if (lsClient) {
         await stopServer(lsClient);
@@ -192,10 +190,7 @@ async function stopCurrentClient(): Promise<void> {
     }
 }
 
-/**
- * The API of the ms-python.python extension, activating it first if needed,
- * or undefined when it is not installed.
- */
+
 async function getPythonApi() {
     const pythonExtension = vscode.extensions.getExtension('ms-python.python');
     if (!pythonExtension) {
