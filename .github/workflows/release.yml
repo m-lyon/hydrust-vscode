@@ -5,22 +5,29 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
-  publish:
-    name: Package, verify and publish
+  # Builds and tests the .vsix. Third-party npm code runs here, so this job
+  # has no access to the Marketplace token.
+  build:
+    name: Package and verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out the extension
-        uses: actions/checkout@v6.1.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v5.0.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
-          cache: npm
+          # No cache in release jobs: a cache written by another run could
+          # change what gets published.
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
@@ -47,7 +54,7 @@ jobs:
       # working floor. Runs before the bundle is built by vsce's prepublish step.
       - name: Pin the fallback server version to the newest complete release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/pin-server-version.mjs
 
       - name: Type-check pinned constants
@@ -56,14 +63,56 @@ jobs:
       - name: Package extension
         run: npx vsce package
 
+      - name: Upload the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vsix
+          path: '*.vsix'
+          if-no-files-found: error
+
+  # Publishes the .vsix built above. The token lives in the protected `release`
+  # environment, which needs a maintainer's approval and accepts only `v*` tags.
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://marketplace.visualstudio.com/items?itemName=m-lyon.hydrust
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the extension
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      # vsce at the locked version. --ignore-scripts stops dependency install
+      # scripts from running in the job that holds the token.
+      - name: Install dependencies without install scripts
+        run: npm ci --ignore-scripts
+
+      - name: Download the package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vsix
+
       - name: Publish to VS Code Marketplace
-        run: npx vsce publish --packagePath *.vsix -p "${{ secrets.VSCE_PAT }}"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --packagePath *.vsix
 
       - name: Create GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
             --generate-notes \
             *.vsix
