@@ -16,7 +16,7 @@ import {
 } from './compatTable';
 import { ExtensionSettings } from './settings';
 import { InvalidServerVersionError, ensureServer, findExistingExecutable, markVersionUsed } from './download';
-import { ResolvedBinary, ServerCompat, probeBinaryVersion } from './compat';
+import { ProbeOptions, ResolvedBinary, ServerCompat, probeBinaryVersion } from './compat';
 import { buildInitializationSettings } from './initializationSettings';
 import { fsapi } from './vscodeapi';
 import { findHydrustInInterpreter } from './pythonEnvironment';
@@ -96,131 +96,129 @@ function resolved(binaryPath: string, source: ServerSource, version?: ServerVers
 }
 
 /**
+ * The binary named by the `serverPath` setting, unless it is missing or known
+ * to be too old to be a language server.
+ */
+async function findFromServerPath(
+    serverPath: string,
+    context: vscode.ExtensionContext,
+    probe: ProbeOptions
+): Promise<ResolvedBinary | undefined> {
+    if (!(await fsapi.pathExists(serverPath))) {
+        logger.warn('No valid path found in settings.path');
+        return undefined;
+    }
+    const version = isHydrustBinary(serverPath)
+        ? await probeBinaryVersion(serverPath, context, { ...probe, retryUnknown: recheckUnknownOnce(serverPath) })
+        : undefined;
+    // Respect the user's choice unless the binary is known to be too old.
+    if (isUsableServer(serverPath, version, true)) {
+        logger.info(`Using 'path' setting: ${serverPath}`);
+        return resolved(serverPath, 'serverPath', version);
+    }
+    logger.warn(`Ignoring 'path' setting ${serverPath}: ${NOT_A_LANGUAGE_SERVER}`);
+    if (!warnedServerPaths.has(serverPath)) {
+        warnedServerPaths.add(serverPath);
+        void vscode.window.showWarningMessage(
+            `${serverPath} is not ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} ` +
+            'or later, so it cannot run the language server. Falling back to another server.'
+        );
+    }
+    return undefined;
+}
+
+/**
  * Look for a hydrust installed in the selected Python environment.
  */
 async function findInPythonEnvironment(
     interpreter: string,
     context: vscode.ExtensionContext,
-    probeTimeoutMs?: number
+    probe: ProbeOptions
 ): Promise<ResolvedBinary | undefined> {
-    const binaryPath = await findHydrustInInterpreter(interpreter, context.extensionPath);
-    if (!binaryPath) {
+    try {
+        const binaryPath = await findHydrustInInterpreter(interpreter, context.extensionPath);
+        if (!binaryPath) {
+            return undefined;
+        }
+        if (!(await fsapi.pathExists(binaryPath))) {
+            logger.warn(`Ignoring ${binaryPath}: reported by ${interpreter} but not found on disk.`);
+            return undefined;
+        }
+        const version = await probeBinaryVersion(binaryPath, context, {
+            ...probe,
+            retryUnknown: recheckUnknownOnce(binaryPath),
+        });
+        if (!isUsableServer(binaryPath, version)) {
+            logger.warn(
+                `Ignoring ${binaryPath} from ${interpreter}: ` +
+                (version ? NOT_A_LANGUAGE_SERVER : 'could not determine its version.')
+            );
+            return undefined;
+        }
+        logger.info(`Using ${binaryPath}, installed in the environment of ${interpreter}`);
+        return resolved(binaryPath, 'pythonEnvironment', version);
+    } catch (err) {
+        logger.debug(`Error checking the Python environment: ${err}`);
         return undefined;
     }
-    if (!(await fsapi.pathExists(binaryPath))) {
-        logger.warn(`Ignoring ${binaryPath}: reported by ${interpreter} but not found on disk.`);
-        return undefined;
-    }
-    const version = await probeBinaryVersion(binaryPath, context, probeTimeoutMs, recheckUnknownOnce(binaryPath));
-    if (!isUsableServer(binaryPath, version)) {
-        logger.warn(
-            `Ignoring ${binaryPath} from ${interpreter}: ` +
-            (version ? NOT_A_LANGUAGE_SERVER : 'could not determine its version.')
-        );
-        return undefined;
-    }
-    logger.info(`Using ${binaryPath}, installed in the environment of ${interpreter}`);
-    return resolved(binaryPath, 'pythonEnvironment', version);
 }
 
 /**
- * Find the hydrust server binary, and note which of the resolution paths
- * found it, along with its version when already known (the bundled release
- * tag, or a probe made while choosing), which saves asking the binary again.
+ * Look for a language server on PATH, picking the highest version among the
+ * names on PATH so an old `hydra-lsp` cannot shadow a newer `hydrust`. A
+ * version that cannot be determined loses to any known one.
  */
-async function findBinaryPath(
-    settings: ExtensionSettings,
-    context: vscode.ExtensionContext,
-    probeTimeoutMs?: number
-): Promise<ResolvedBinary> {
-
-    // 1. User-specified path takes priority
-    if (settings.path.length > 0) {
-        if (await fsapi.pathExists(settings.path)) {
-            const version = isHydrustBinary(settings.path)
-                ? await probeBinaryVersion(settings.path, context, probeTimeoutMs, recheckUnknownOnce(settings.path))
-                : undefined;
-            // Respect the user's choice unless the binary is known to be too old.
-            if (isUsableServer(settings.path, version, true)) {
-                logger.info(`Using 'path' setting: ${settings.path}`);
-                return resolved(settings.path, 'serverPath', version);
+async function findOnPath(context: vscode.ExtensionContext, probe: ProbeOptions): Promise<ResolvedBinary | undefined> {
+    try {
+        let best: { path: string; version?: ServerVersion } | undefined;
+        for (const candidate of PATH_CANDIDATES) {
+            const environmentPath = await which(candidate, { nothrow: true });
+            if (!environmentPath) {
+                continue;
             }
-            logger.warn(`Ignoring 'path' setting ${settings.path}: ${NOT_A_LANGUAGE_SERVER}`);
-            if (!warnedServerPaths.has(settings.path)) {
-                warnedServerPaths.add(settings.path);
-                void vscode.window.showWarningMessage(
-                    `${settings.path} is not ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} ` +
-                    'or later, so it cannot run the language server. Falling back to another server.'
-                );
-            }
-        } else {
-            logger.warn('No valid path found in settings.path');
-        }
-    }
-
-    // 2. Use environment if explicitly requested
-    if (settings.importStrategy === 'fromEnvironment') {
-        // 2a. The selected Python environment.
-        if (settings.interpreter) {
-            try {
-                const fromPython = await findInPythonEnvironment(settings.interpreter, context, probeTimeoutMs);
-                if (fromPython) {
-                    return fromPython;
-                }
-            } catch (err) {
-                logger.debug(`Error checking the Python environment: ${err}`);
-            }
-        }
-
-        // 2b. PATH.
-        try {
-            // Pick the highest version among the names on PATH, so an old
-            // `hydra-lsp` cannot shadow a newer `hydrust`. A version that
-            // cannot be determined loses to any known one.
-            let best: { path: string; version?: ServerVersion } | undefined;
-            for (const candidate of PATH_CANDIDATES) {
-                const environmentPath = await which(candidate, { nothrow: true });
-                if (!environmentPath) {
-                    continue;
-                }
-                // A remembered failure may just have been a slow first run,
-                // so a hydrust gets asked again once per session before it
-                // is ruled out.
-                const recheck = isHydrustBinary(environmentPath) && recheckUnknownOnce(environmentPath);
-                const version = await probeBinaryVersion(environmentPath, context, probeTimeoutMs, recheck);
-                if (!isUsableServer(environmentPath, version)) {
-                    if (version) {
-                        logger.info(`Ignoring ${environmentPath}: ${NOT_A_LANGUAGE_SERVER}`);
-                    } else {
-                        logger.warn(
-                            `Ignoring ${environmentPath}: could not determine its version, so cannot tell ` +
-                            `whether it is ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} or later.`
-                        );
-                    }
-                    continue;
-                }
-                if (!best) {
-                    best = { path: environmentPath, version };
-                } else if (version && (!best.version || compareServerVersions(version, best.version) > 0)) {
-                    logger.info(`Ignoring ${best.path}: ${environmentPath} is newer.`);
-                    best = { path: environmentPath, version };
+            // A remembered failure may just have been a slow first run,
+            // so a hydrust gets asked again once per session before it
+            // is ruled out.
+            const recheck = isHydrustBinary(environmentPath) && recheckUnknownOnce(environmentPath);
+            const version = await probeBinaryVersion(environmentPath, context, { ...probe, retryUnknown: recheck });
+            if (!isUsableServer(environmentPath, version)) {
+                if (version) {
+                    logger.info(`Ignoring ${environmentPath}: ${NOT_A_LANGUAGE_SERVER}`);
                 } else {
-                    logger.info(`Ignoring ${environmentPath}: ${best.path} is at least as new.`);
+                    logger.warn(
+                        `Ignoring ${environmentPath}: could not determine its version, so cannot tell ` +
+                        `whether it is ${DISPLAY_NAME} ${formatServerVersion(UNIFIED_BINARY_VERSION)} or later.`
+                    );
                 }
+                continue;
             }
-            if (best) {
-                logger.info(`Using environment executable: ${best.path}`);
-                return resolved(best.path, 'environment', best.version);
+            if (!best) {
+                best = { path: environmentPath, version };
+            } else if (version && (!best.version || compareServerVersions(version, best.version) > 0)) {
+                logger.info(`Ignoring ${best.path}: ${environmentPath} is newer.`);
+                best = { path: environmentPath, version };
+            } else {
+                logger.info(`Ignoring ${environmentPath}: ${best.path} is at least as new.`);
             }
-        } catch (err) {
-            logger.debug(`Error checking PATH: ${err}`);
         }
+        if (best) {
+            logger.info(`Using environment executable: ${best.path}`);
+            return resolved(best.path, 'environment', best.version);
+        }
+    } catch (err) {
+        logger.debug(`Error checking PATH: ${err}`);
     }
+    return undefined;
+}
 
-    // 3. Fallback to bundled (download if needed)
+/**
+ * The bundled server, downloaded if needed. If the download fails, fall back
+ * to one downloaded earlier.
+ */
+async function findBundled(serverVersion: string, context: vscode.ExtensionContext): Promise<ResolvedBinary> {
     logger.info('Falling back to bundled executable');
     try {
-        const installed = await ensureServer(settings.serverVersion, context);
+        const installed = await ensureServer(serverVersion, context);
         return { path: installed.path, source: 'bundled', version: installed.version };
     } catch (err) {
         if (err instanceof InvalidServerVersionError) {
@@ -231,7 +229,7 @@ async function findBinaryPath(
         // downloaded binary on disk so the extension can still start.
         logger.warn(`ensureServer failed: ${err}`);
         // `latest` already falls back to installed binaries inside ensureServer.
-        const isLatest = settings.serverVersion === 'latest' || !settings.serverVersion;
+        const isLatest = serverVersion === 'latest' || !serverVersion;
         const cached = isLatest ? undefined : await findExistingExecutable(context);
         if (cached) {
             logger.warn(`Falling back to previously installed binary: ${cached.path}`);
@@ -241,6 +239,39 @@ async function findBinaryPath(
         logger.error('No previously installed binary available to fall back to.');
         throw err;
     }
+}
+
+/**
+ * Find the hydrust server binary, and note which of the resolution paths
+ * found it, along with its version when already known (the bundled release
+ * tag, or a probe made while choosing), which saves asking the binary again.
+ */
+async function findBinaryPath(
+    settings: ExtensionSettings,
+    context: vscode.ExtensionContext,
+    probe: ProbeOptions
+): Promise<ResolvedBinary> {
+    // 1. User-specified path takes priority
+    if (settings.path.length > 0) {
+        const fromSetting = await findFromServerPath(settings.path, context, probe);
+        if (fromSetting) {
+            return fromSetting;
+        }
+    }
+
+    // 2. Use environment if explicitly requested: the selected Python
+    // environment, then PATH.
+    if (settings.importStrategy === 'fromEnvironment') {
+        const fromEnvironment =
+            (settings.interpreter ? await findInPythonEnvironment(settings.interpreter, context, probe) : undefined) ??
+            (await findOnPath(context, probe));
+        if (fromEnvironment) {
+            return fromEnvironment;
+        }
+    }
+
+    // 3. Fallback to bundled (download if needed)
+    return findBundled(settings.serverVersion, context);
 }
 
 /**
@@ -254,12 +285,12 @@ export async function startServer(
     traceOutputChannel: vscode.OutputChannel,
     context: vscode.ExtensionContext,
     projectRoot?: string,
-    probeTimeoutMs?: number
+    probe: ProbeOptions = {}
 ): Promise<StartedServer> {
     logger.info('Starting Hydrust Server...');
 
     // Find the binary
-    const binary = await findBinaryPath(settings, context, probeTimeoutMs);
+    const binary = await findBinaryPath(settings, context, probe);
     logger.info(`Server path: ${binary.path}`);
 
     // Check if binary exists
@@ -277,7 +308,7 @@ export async function startServer(
         settings.disabledRules,
         projectRoot,
         context,
-        probeTimeoutMs
+        probe
     );
 
     // Set up server options. SERVER_ARGS is unconditional, including for
