@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -121,6 +123,16 @@ describe('the table itself', () => {
         expect(new Set(keys).size).toBe(keys.length);
         const configKeys = SETTING_COMPAT.map((entry) => entry.configKey);
         expect(new Set(configKeys).size).toBe(configKeys.length);
+    });
+
+    it('only names settings that package.json declares', () => {
+        // A typo in a configKey would never match a configured setting, so the
+        // report would silently stop mentioning it.
+        const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8'));
+        const declared = Object.keys(manifest.contributes.configuration.properties);
+        for (const entry of SETTING_COMPAT) {
+            expect(declared).toContain(`hydrust.${entry.configKey}`);
+        }
     });
 
     it('names every rule code exactly once', () => {
