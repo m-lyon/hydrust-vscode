@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { LanguageClient } from 'vscode-languageclient/node';
-import { LazyOutputChannel, logger } from "./common/logger";
+import { logger } from "./common/logger";
 import { startServer, stopServer } from './common/server';
 import { getExtensionSettings, checkIfConfigurationChanged } from './common/settings';
 import { getProjectRoot, registerCommand, onDidChangeConfiguration } from './common/vscodeapi';
@@ -40,13 +40,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const serverName = SERVER_NAME;
     const serverId = SERVER_ID;
 
-    // Create output channels for the server and trace logs
-    const outputChannel = vscode.window.createOutputChannel(`${serverName} Server`);
-    const traceOutputChannel = new LazyOutputChannel(`${serverName} Server Trace`);
+    // The server's log channel, which also carries the LSP trace. The client
+    // only traces while this channel's log level is Trace; hydrust.trace.server
+    // then picks how verbose the trace is.
+    const outputChannel = vscode.window.createOutputChannel(`${serverName} Server`, { log: true });
 
     // Make sure that these channels are disposed when the extension is deactivated.
     context.subscriptions.push(outputChannel);
-    context.subscriptions.push(traceOutputChannel);
     context.subscriptions.push(logger.channel);
 
     // Tracks which server is running and what it supports. Lives for the whole
@@ -93,7 +93,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 serverId,
                 serverName,
                 outputChannel,
-                traceOutputChannel,
                 context,
                 projectRoot
             );

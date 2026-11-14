@@ -280,8 +280,7 @@ export async function startServer(
     settings: ExtensionSettings,
     serverId: string,
     serverName: string,
-    outputChannel: vscode.OutputChannel,
-    traceOutputChannel: vscode.OutputChannel,
+    outputChannel: vscode.LogOutputChannel,
     context: vscode.ExtensionContext,
     projectRoot?: string,
     probe: ProbeOptions = {}
@@ -330,7 +329,6 @@ export async function startServer(
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'yaml' }],
         outputChannel: outputChannel,
-        traceOutputChannel: traceOutputChannel,
         initializationOptions: {
             settings: initializationSettings,
         },
