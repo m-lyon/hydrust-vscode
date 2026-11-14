@@ -801,7 +801,6 @@ function normaliseTag(version: string): string {
     return version.startsWith('v') ? version : `v${version}`;
 }
 
-/** Whether a hydrust.serverVersion value means "track the latest release". */
 export function isLatestVersion(version: string): boolean {
     return version === 'latest' || !version;
 }
