@@ -144,7 +144,7 @@ const PROBE_TIMEOUT_MS = 500;
 
 let scratchDir: string;
 let context: ReturnType<typeof createStubExtensionContext>;
-let outputChannel: vscode.OutputChannel;
+let outputChannel: vscode.LogOutputChannel;
 
 /** Cast the stub context to the type the production code asks for. */
 function asExtensionContext(value: unknown): vscode.ExtensionContext {
@@ -204,7 +204,6 @@ function start(settings: ExtensionSettings, projectRoot?: string) {
         SERVER_ID,
         SERVER_NAME,
         outputChannel,
-        outputChannel,
         asExtensionContext(context),
         projectRoot,
         { timeoutMs: PROBE_TIMEOUT_MS }
@@ -230,7 +229,7 @@ beforeEach(() => {
     pythonStub.lookups = [];
     scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hydrust-server-'));
     context = createStubExtensionContext(scratchDir);
-    outputChannel = { name: 'test' } as unknown as vscode.OutputChannel;
+    outputChannel = { name: 'test' } as unknown as vscode.LogOutputChannel;
 });
 
 afterEach(() => {

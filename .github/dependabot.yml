@@ -22,6 +22,10 @@ updates:
     # (engines.vscode), so it only changes on purpose.
     ignore:
       - dependency-name: "@types/vscode"
+      # typescript-eslint doesn't support TypeScript 7 yet (its peer range
+      # stops below 6.1). Drop this once it does.
+      - dependency-name: "typescript"
+        versions: [">=7"]
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
