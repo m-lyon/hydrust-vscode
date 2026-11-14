@@ -801,6 +801,10 @@ function normaliseTag(version: string): string {
     return version.startsWith('v') ? version : `v${version}`;
 }
 
+export function isLatestVersion(version: string): boolean {
+    return version === 'latest' || !version;
+}
+
 /**
  * A progress notification that is not opened until the first message is
  * reported, and closes on `finish()`.
@@ -994,7 +998,7 @@ export function ensureServer(
     version: string,
     context: vscode.ExtensionContext
 ): Promise<InstalledServer> {
-    const key = version === 'latest' || !version ? 'latest' : normaliseTag(version);
+    const key = isLatestVersion(version) ? 'latest' : normaliseTag(version);
     if (key !== 'latest' && !TAG_PATTERN.test(key)) {
         return Promise.reject(new InvalidServerVersionError(`Invalid hydrust.serverVersion ${JSON.stringify(version)}: expected 'latest' or a version like 0.4.2`));
     }
