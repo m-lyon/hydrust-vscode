@@ -145,6 +145,23 @@ export function fileInWorkingTree(filePath: string): string | undefined {
     return fs.existsSync(full) ? fs.readFileSync(full, 'utf8') : undefined;
 }
 
+
+export function moduleInWorkingTree(name: string): string | undefined {
+    const root = fileInWorkingTree(`src/${name}.rs`);
+    if (root === undefined) {
+        return undefined;
+    }
+    const dir = path.join(requireServerRepo(), 'src', name);
+    const children = fs.existsSync(dir)
+        ? fs
+              .readdirSync(dir, { recursive: true, encoding: 'utf8' })
+              .filter((file) => file.endsWith('.rs'))
+              .sort()
+              .map((file) => fs.readFileSync(path.join(dir, file), 'utf8'))
+        : [];
+    return [root, ...children].join('\n');
+}
+
 /** True when `needle` appears anywhere under `src/` at that tag. */
 export function existsAtTag(tag: string, needle: string): boolean {
     return gitMayFail(['grep', '--fixed-strings', '--quiet', needle, tag, '--', 'src/']).ok;

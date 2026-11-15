@@ -36,6 +36,7 @@ import {
     fileAtTag,
     fileInWorkingTree,
     filesContainingAtTag,
+    moduleInWorkingTree,
     releasedTags,
     requireServerRepo,
     serverRepoPath,
@@ -336,8 +337,8 @@ describe('FEATURE_COMPAT', () => {
     });
 
     it('finds every feature really implemented on the unreleased branch', () => {
-        const backend = fileInWorkingTree('src/backend.rs');
-        expect(backend, 'src/backend.rs is missing from the server working tree').toBeDefined();
+        const backend = moduleInWorkingTree('backend');
+        expect(backend, 'the backend module is missing from the server working tree').toBeDefined();
 
         const problems: string[] = [];
         for (const feature of FEATURE_COMPAT) {
@@ -356,7 +357,7 @@ describe('FEATURE_COMPAT', () => {
     });
 
     it('uses the same feature names the server advertises', () => {
-        const backend = fileInWorkingTree('src/backend.rs') ?? '';
+        const backend = moduleInWorkingTree('backend') ?? '';
         const problems = FEATURE_COMPAT.filter((feature) => !backend.includes(`"${feature.name}"`)).map(
             (feature) =>
                 `${feature.name}: the extension branches on this name, but the server never ` +
