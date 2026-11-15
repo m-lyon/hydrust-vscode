@@ -2,7 +2,7 @@
 
 ## [0.2.0]
 
-- **Breaking:** renamed the `hydrust.traceServer` setting to `hydrust.trace.server`. The old setting never had any effect, so tracing now works; move any existing value to the new key.
+- **Breaking:** renamed the `hydrust.traceServer` setting to `hydrust.trace.server`. The old setting never had any effect. The trace now appears only while the Hydrust Server output channel's log level is set to Trace. `hydrust.trace.server` only sets the detail level (`messages` or `verbose`), and `off` is no longer a valid value.
 - **Breaking:** the extension now needs VS Code 1.91 or later (was 1.75), because it moves to vscode-languageclient 11.
 - Fixed server install failing when the extension's storage path contains an apostrophe (e.g. a Windows user named `O'Brien`), `$`, a backtick or brackets
 
