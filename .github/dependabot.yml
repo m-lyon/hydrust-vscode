@@ -3,7 +3,7 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     # Wait a week after a release before proposing it, so a compromised
     # release has time to be found and pulled.
     cooldown:
@@ -15,7 +15,7 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     cooldown:
       default-days: 7
     # @types/vscode sets the lowest VS Code version the extension supports
@@ -26,6 +26,9 @@ updates:
       # stops below 6.1). Drop this once it does.
       - dependency-name: "typescript"
         versions: [">=7"]
+      # Major upgrades are done by hand.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
