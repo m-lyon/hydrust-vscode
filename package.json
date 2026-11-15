@@ -64,10 +64,9 @@
           "type": "string"
         },
         "hydrust.trace.server": {
-          "default": "off",
-          "description": "How much of the communication between VS Code and the language server to trace. Tracing only runs while the Hydrust Server output channel's log level is set to Trace, and `off` then behaves like `messages`.",
+          "default": "messages",
+          "description": "How much detail the trace of the communication between VS Code and the language server shows. The trace only runs while the Hydrust Server output channel's log level is set to Trace.",
           "enum": [
-            "off",
             "messages",
             "verbose"
           ],
