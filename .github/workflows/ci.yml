@@ -112,15 +112,10 @@ jobs:
         working-directory: hydrust-vscode
         run: npm ci
 
-      # This action has no version tags, only moving branches, so it is pinned
-      # by commit. The comment says which branch that commit came from. The
-      # branch is rebuilt often, so an old pin drops off it; move the pin to the
-      # current branch head when zizmor reports `impostor-commit`. A SHA ref does
-      # not name the toolchain, so the input sets it.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          toolchain: stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
