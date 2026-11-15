@@ -19,3 +19,4 @@ REVIEW.md
 node_modules
 out/
 .eslintrc.json
+assets/*.svg
