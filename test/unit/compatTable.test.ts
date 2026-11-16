@@ -182,7 +182,7 @@ describe('buildCompatReport in fallback mode', () => {
 
     it('says nothing about a version new enough for everything', () => {
         const report = buildCompatReport({
-            version: v(0, 6, 0),
+            version: v(0, 7, 0),
             configuredSettings: SETTING_COMPAT.map((entry) => entry.configKey),
             configuredRules: RULE_COMPAT.map((entry) => entry.code),
         });
@@ -250,6 +250,17 @@ describe('buildCompatReport in fallback mode', () => {
 
         expect(report.unsupportedRules.map((entry) => entry.name)).toEqual(['positional-only-parameter']);
         expect(report.unsupportedRules[0].reason).toContain('added in hydrust v0.6.0');
+    });
+
+    it('reports yaml-syntax-error on a server older than v0.7.0', () => {
+        const report = buildCompatReport({
+            version: v(0, 6, 1),
+            configuredSettings: ['disabledRules'],
+            configuredRules: ['positional-only-parameter', 'yaml-syntax-error'],
+        });
+
+        expect(report.unsupportedRules.map((entry) => entry.name)).toEqual(['yaml-syntax-error']);
+        expect(report.unsupportedRules[0].reason).toContain('added in hydrust v0.7.0');
     });
 
     it('stays quiet about a renamed rule that was rewritten instead', () => {

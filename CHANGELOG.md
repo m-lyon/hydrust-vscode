@@ -1,5 +1,9 @@
 # Change Log
 
+## [0.2.1]
+
+- Added `yaml-syntax-error` to the rules accepted by `hydrust.disabledRules`, for hydrust server `v0.7.0`. It reports a Hydra file whose YAML does not parse, and disabling it is the only way to silence it, since a file that fails to parse has no suppression comments to read
+
 ## [0.2.0]
 
 - **Breaking:** renamed the `hydrust.traceServer` setting to `hydrust.trace.server`. The old setting never had any effect. The trace now appears only while the Hydrust Server output channel's log level is set to Trace. `hydrust.trace.server` only sets the detail level (`messages` or `verbose`), and `off` is no longer a valid value.

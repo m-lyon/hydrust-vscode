@@ -330,6 +330,11 @@ export const RULE_COMPAT: readonly RuleCompat[] = [
         since: ver(0, 6, 0),
         evidence: 'Not accepted by any released tag. Added on the hydra-lsp feature/builtins-support branch (src/diagnostics.rs:61, PositionalOnlyParameter), slated for v0.6.0.',
     },
+    {
+        code: 'yaml-syntax-error',
+        since: ver(0, 7, 0),
+        evidence: 'Not accepted by any released tag. Emitted as a diagnostic code since v0.2.0 but absent from from_code until the hydra-lsp hydrust-source-and-yaml-syntax-rule branch (src/rules.rs, YamlSyntaxError), slated for v0.7.0.',
+    },
 ];
 
 /** Optional server behaviours the extension may want to branch on. */
