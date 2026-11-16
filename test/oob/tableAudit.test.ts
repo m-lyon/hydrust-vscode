@@ -93,9 +93,6 @@ function codesAcceptedAtTag(tag: string): string[] | undefined {
 /**
  * The file that holds a tag's `DiagnosticRule::from_code`, or undefined when
  * the tag has none.
- *
- * Every tag up to v0.6.x keeps it in src/diagnostics.rs. v0.7.0 moved the rule
- * registry into its own leaf module, src/rules.rs.
  */
 function ruleRegistryFileAtTag(tag: string): string | undefined {
     return RULE_REGISTRY_FILES.find((file) => fileAtTag(tag, file)?.includes('fn from_code'));

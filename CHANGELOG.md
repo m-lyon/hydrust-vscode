@@ -2,7 +2,7 @@
 
 ## [0.2.1]
 
-- Added `yaml-syntax-error` to the rules accepted by `hydrust.disabledRules`, for hydrust server `v0.7.0`. It reports a Hydra file whose YAML does not parse, and disabling it is the only way to silence it, since a file that fails to parse has no suppression comments to read
+- Added `yaml-syntax-error` to the rules accepted by `hydrust.disabledRules`, for hydrust server `v0.7.0`.
 
 ## [0.2.0]
 
