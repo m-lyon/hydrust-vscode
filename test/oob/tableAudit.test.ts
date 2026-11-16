@@ -71,10 +71,11 @@ beforeAll(() => {
  * the codes have to come from the macro invocation instead.
  */
 function codesAcceptedAtTag(tag: string): string[] | undefined {
-    const source = fileAtTag(tag, 'src/diagnostics.rs');
-    if (!source) {
+    const file = ruleRegistryFileAtTag(tag);
+    if (!file) {
         return undefined;
     }
+    const source = fileAtTag(tag, file)!;
     const start = source.indexOf('fn from_code');
     if (start === -1) {
         return undefined;
@@ -88,6 +89,16 @@ function codesAcceptedAtTag(tag: string): string[] | undefined {
     const body = source.slice(start, end === -1 ? undefined : end);
     return [...body.matchAll(/"([a-z][a-z-]*)"\s*=>/g)].map((entry) => entry[1]);
 }
+
+/**
+ * The file that holds a tag's `DiagnosticRule::from_code`, or undefined when
+ * the tag has none.
+ */
+function ruleRegistryFileAtTag(tag: string): string | undefined {
+    return RULE_REGISTRY_FILES.find((file) => fileAtTag(tag, file)?.includes('fn from_code'));
+}
+
+const RULE_REGISTRY_FILES = ['src/rules.rs', 'src/diagnostics.rs'];
 
 /**
  * The codes listed in the `diagnostic_rules!` invocation, or undefined when the
@@ -204,18 +215,19 @@ describe('RULE_COMPAT', () => {
         expectNoProblems(problems);
     });
 
-    it('finds every code in the diagnostics module, not just anywhere in src', () => {
+    it('finds every code in the rule registry, not just anywhere in src', () => {
         const problems: string[] = [];
         for (const rule of RULE_COMPAT) {
             const claimed = formatServerVersion(rule.since);
             if (!tags.includes(claimed)) {
                 continue;
             }
+            const registry = ruleRegistryFileAtTag(claimed);
             const files = filesContainingAtTag(claimed, `"${rule.code}"`);
-            if (!files.includes('src/diagnostics.rs')) {
+            if (!registry || !files.includes(registry)) {
                 problems.push(
                     `${rule.code}: at ${claimed} the code appears in ${files.join(', ') || 'nothing'}, ` +
-                    'but not in src/diagnostics.rs where from_code lives.'
+                    `but not in ${registry ?? 'any file with a from_code'}, where from_code lives.`
                 );
             }
         }
