@@ -182,7 +182,7 @@ describe('buildCompatReport in fallback mode', () => {
 
     it('says nothing about a version new enough for everything', () => {
         const report = buildCompatReport({
-            version: v(0, 7, 0),
+            version: v(0, 8, 0),
             configuredSettings: SETTING_COMPAT.map((entry) => entry.configKey),
             configuredRules: RULE_COMPAT.map((entry) => entry.code),
         });
@@ -261,6 +261,21 @@ describe('buildCompatReport in fallback mode', () => {
 
         expect(report.unsupportedRules.map((entry) => entry.name)).toEqual(['yaml-syntax-error']);
         expect(report.unsupportedRules[0].reason).toContain('added in hydrust v0.7.0');
+    });
+
+    it('reports invalid-argument-type and the convert/recursive defaults on a server older than v0.8.0', () => {
+        const report = buildCompatReport({
+            version: v(0, 7, 0),
+            configuredSettings: ['disabledRules', 'defaultConvert', 'defaultRecursive'],
+            configuredRules: ['yaml-syntax-error', 'invalid-argument-type'],
+        });
+
+        expect(report.unsupportedSettings.map((entry) => entry.name)).toEqual([
+            'defaultConvert',
+            'defaultRecursive',
+        ]);
+        expect(report.unsupportedRules.map((entry) => entry.name)).toEqual(['invalid-argument-type']);
+        expect(report.unsupportedRules[0].reason).toContain('added in hydrust v0.8.0');
     });
 
     it('stays quiet about a renamed rule that was rewritten instead', () => {

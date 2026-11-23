@@ -2,7 +2,7 @@
   "name": "hydrust",
   "displayName": "Hydrust",
   "description": "A Language server for Hydra configuration files built in Rust. Hydrust provides intelligent language features such as hover information, diagnostics, go-to-definition, and more.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "m-lyon",
   "license": "MIT",
   "repository": {
@@ -75,7 +75,7 @@
         },
         "hydrust.disabledRules": {
           "default": [],
-          "markdownDescription": "List of diagnostic rules to disable.\n\n_(requires hydrust v0.2.0 or later; the `invalid-hydra-parameter`, `parameter-already-assigned` and `too-many-positional-arguments` rules require v0.3.0 or later, `positional-only-parameter` requires v0.6.0 or later, and `yaml-syntax-error` requires v0.7.0 or later)_",
+          "markdownDescription": "List of diagnostic rules to disable.\n\n_(requires hydrust v0.2.0 or later; the `invalid-hydra-parameter`, `parameter-already-assigned` and `too-many-positional-arguments` rules require v0.3.0 or later, `positional-only-parameter` requires v0.6.0 or later, `yaml-syntax-error` requires v0.7.0 or later, and `invalid-argument-type` requires v0.8.0 or later)_",
           "scope": "resource",
           "items": {
             "type": "string",
@@ -88,7 +88,8 @@
               "parameter-already-assigned",
               "too-many-positional-arguments",
               "positional-only-parameter",
-              "yaml-syntax-error"
+              "yaml-syntax-error",
+              "invalid-argument-type"
             ]
           },
           "type": "array"
@@ -122,6 +123,30 @@
           ],
           "scope": "window",
           "type": "integer"
+        },
+        "hydrust.defaultConvert": {
+          "default": "none",
+          "markdownDescription": "The `_convert_` mode hydrust assumes for a node that neither sets `_convert_` nor inherits it from a parent, when the file has no `# hydrust: convert[...]` directive. Set it to match the `_convert_` your code passes to `instantiate`, so that argument types are checked against what Hydra actually passes.\n\n_(requires hydrust v0.8.0 or later)_",
+          "enum": [
+            "none",
+            "partial",
+            "all",
+            "object"
+          ],
+          "enumDescriptions": [
+            "Hydra's default: lists and mappings are passed as `ListConfig` and `DictConfig`.",
+            "Lists and mappings are passed as `list` and `dict`; structured configs stay `DictConfig`.",
+            "Lists, mappings and structured configs are all passed as `list` and `dict`.",
+            "Lists and mappings are passed as `list` and `dict`; structured configs become their dataclass."
+          ],
+          "scope": "resource",
+          "type": "string"
+        },
+        "hydrust.defaultRecursive": {
+          "default": true,
+          "markdownDescription": "The `_recursive_` value hydrust assumes for a node that neither sets `_recursive_` nor inherits it from a parent, when the file has no `# hydrust: recursive[...]` directive. Set it to `false` if your code passes `_recursive_=False` to `instantiate`, so nested `_target_` values are checked as the `DictConfig` Hydra passes.\n\n_(requires hydrust v0.8.0 or later)_",
+          "scope": "resource",
+          "type": "boolean"
         },
         "hydrust.enableHover": {
           "default": true,

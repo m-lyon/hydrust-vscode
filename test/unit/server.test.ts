@@ -193,6 +193,8 @@ function settingsFor(binaryPath: string, overrides: Partial<ExtensionSettings> =
         enableSemanticTokens: true,
         enableDiagnostics: true,
         numThreads: 0,
+        defaultConvert: 'none',
+        defaultRecursive: true,
         ...overrides,
     };
 }
@@ -261,6 +263,8 @@ describe('the payload handed to the language client', () => {
             enableSemanticTokens: true,
             enableDiagnostics: true,
             numThreads: 6,
+            defaultConvert: 'none',
+            defaultRecursive: true,
         });
     });
 
