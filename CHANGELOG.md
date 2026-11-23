@@ -1,5 +1,10 @@
 # Change Log
 
+## [0.2.2]
+
+- Added `invalid-argument-type` to the rules accepted by `hydrust.disabledRules`, for hydrust server `v0.8.0`. It reports a config value whose type the `_target_`'s parameter does not accept.
+- Added the `hydrust.defaultConvert` and `hydrust.defaultRecursive` settings, for hydrust server `v0.8.0`. They set the `_convert_` and `_recursive_` hydrust assumes when a file does not set them, such as when your code passes them to `instantiate`.
+
 ## [0.2.1]
 
 - Added `yaml-syntax-error` to the rules accepted by `hydrust.disabledRules`, for hydrust server `v0.7.0`.

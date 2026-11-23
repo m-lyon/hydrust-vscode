@@ -18,6 +18,8 @@ function settings(overrides: Partial<ExtensionSettings> = {}): ExtensionSettings
         enableSemanticTokens: true,
         enableDiagnostics: true,
         numThreads: 0,
+        defaultConvert: 'none',
+        defaultRecursive: true,
         ...overrides,
     };
 }
@@ -45,6 +47,12 @@ describe('buildInitializationSettings', () => {
             enableSemanticTokens: false,
             enableDiagnostics: false,
         });
+    });
+
+    it('sends the convert and recursive defaults', () => {
+        const payload = buildInitializationSettings(settings({ defaultConvert: 'all', defaultRecursive: false }));
+
+        expect(payload).toMatchObject({ defaultConvert: 'all', defaultRecursive: false });
     });
 
     it('sends numThreads only when it is positive', () => {
@@ -81,6 +89,8 @@ describe('buildInitializationSettings', () => {
         const payload = buildInitializationSettings(settings({ numThreads: 2, interpreter: '/usr/bin/python' }));
 
         expect(Object.keys(payload).sort()).toEqual([
+            'defaultConvert',
+            'defaultRecursive',
             'disabledRules',
             'enableCompletion',
             'enableDiagnostics',

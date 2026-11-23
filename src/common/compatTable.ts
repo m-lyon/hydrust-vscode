@@ -261,6 +261,18 @@ export const SETTING_COMPAT: readonly SettingCompat[] = [
         since: ver(0, 4, 0),
         evidence: 'Not read by any released tag. First read on the v0.4.0 development branch (src/backend.rs, initialize).',
     },
+    {
+        key: 'defaultConvert',
+        configKey: 'defaultConvert',
+        since: ver(0, 8, 0),
+        evidence: 'Not read by any released tag. First read in hydra-lsp PR #106 (src/backend/capabilities.rs, Settings::from_json), slated for v0.8.0.',
+    },
+    {
+        key: 'defaultRecursive',
+        configKey: 'defaultRecursive',
+        since: ver(0, 8, 0),
+        evidence: 'Not read by any released tag. First read in hydra-lsp PR #106 (src/backend/capabilities.rs, Settings::from_json), slated for v0.8.0.',
+    },
 ];
 
 /** A diagnostic rule code that `hydrust.disabledRules` can name. */
@@ -334,6 +346,11 @@ export const RULE_COMPAT: readonly RuleCompat[] = [
         code: 'yaml-syntax-error',
         since: ver(0, 7, 0),
         evidence: 'Not accepted by any released tag. Emitted as a diagnostic code since v0.2.0 but absent from from_code until the hydra-lsp hydrust-source-and-yaml-syntax-rule branch (src/rules.rs, YamlSyntaxError), slated for v0.7.0.',
+    },
+    {
+        code: 'invalid-argument-type',
+        since: ver(0, 8, 0),
+        evidence: 'Not accepted by any released tag. Added in hydra-lsp PR #106 (src/rules.rs, InvalidArgumentType), slated for v0.8.0.',
     },
 ];
 

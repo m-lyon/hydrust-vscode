@@ -16,6 +16,8 @@ export interface ExtensionSettings {
     enableSemanticTokens: boolean;
     enableDiagnostics: boolean;
     numThreads: number;
+    defaultConvert: 'none' | 'partial' | 'all' | 'object';
+    defaultRecursive: boolean;
     // developerMode omitted here as callers use `isDeveloperMode` instead
 }
 
@@ -48,6 +50,8 @@ export function getExtensionSettings(serverId: string, projectRoot?: string): Ex
         enableSemanticTokens: config.get<boolean>('enableSemanticTokens', true),
         enableDiagnostics: config.get<boolean>('enableDiagnostics', true),
         numThreads: config.get<number>('numThreads', 0),
+        defaultConvert: config.get<'none' | 'partial' | 'all' | 'object'>('defaultConvert', 'none'),
+        defaultRecursive: config.get<boolean>('defaultRecursive', true),
     };
 }
 
@@ -59,7 +63,7 @@ export function checkIfConfigurationChanged(e: vscode.ConfigurationChangeEvent, 
         'serverPath', 'pythonInterpreterPath', 'importStrategy', 'serverVersion', 'disabledRules',
         'enableHover', 'enableCompletion', 'enableSignatureHelp',
         'enableGotoDefinition', 'enableSemanticTokens', 'enableDiagnostics',
-        'numThreads', 'developerMode',
+        'numThreads', 'defaultConvert', 'defaultRecursive', 'developerMode',
     ];
     return sections.some((section) => e.affectsConfiguration(`${serverId}.${section}`));
 }

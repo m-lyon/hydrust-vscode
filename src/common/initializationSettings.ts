@@ -23,5 +23,7 @@ export function buildInitializationSettings(settings: ExtensionSettings): Record
         enableSemanticTokens: settings.enableSemanticTokens,
         enableDiagnostics: settings.enableDiagnostics,
         numThreads: settings.numThreads > 0 ? settings.numThreads : undefined,
+        defaultConvert: settings.defaultConvert,
+        defaultRecursive: settings.defaultRecursive,
     };
 }
